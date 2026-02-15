@@ -87,6 +87,9 @@ class RunAnywhere {
     send?.send([id, status, progress]);
   }
 
+  StreamController<String>? _activeChatController;
+  StreamSubscription? _tokenSubscription;
+
   /// Initialize the engine
   Future<void> initialize() async {
     if (_isInitialized) return;
@@ -96,7 +99,6 @@ class RunAnywhere {
     }
     
     // Register background isolate communication for downloader
-    // Clean up existing mapping to prevent "Port already registered" error on hot restart
     IsolateNameServer.removePortNameMapping('downloader_send_port');
     IsolateNameServer.registerPortWithName(_port.sendPort, 'downloader_send_port');
     
@@ -113,130 +115,111 @@ class RunAnywhere {
     final tasks = await FlutterDownloader.loadTasks();
     if (tasks != null) {
       for (var task in tasks) {
-        // Only track relevant tasks to avoid noise
         if (task.status == DownloadTaskStatus.running || 
             task.status == DownloadTaskStatus.enqueued ||
             task.status == DownloadTaskStatus.paused ||
             task.status == DownloadTaskStatus.complete) {
-            
-             if (kDebugMode) {
-               print('RunAnywhere: Found existing task ${task.taskId} status: ${task.status}');
-             }
-             _downloadStreamController.add(DownloadUpdate(task.taskId, task.status, task.progress));
+              _downloadStreamController.add(DownloadUpdate(task.taskId, task.status, task.progress));
         }
       }
     }
+
+    // Initialize Token Listener Globally
+    _tokenSubscription = Fllama.instance()?.onTokenStream?.listen((data) {
+        if (kDebugMode) print('RunAnywhere: Stream Data: $data');
+
+        if (data is! Map) return;
+
+        if (data['function'] == 'completion') {
+           final result = data['result'];
+           if (result is Map && result.containsKey('token')) {
+              final token = result['token']?.toString();
+               // Dispatch to active controller if it exists
+              if (_activeChatController != null && !_activeChatController!.isClosed) {
+                  if (token != null) {
+                       // if (kDebugMode) print('Token received: "$token"'); 
+                      _activeChatController!.add(token);
+                  }
+              }
+           }
+        } else if (data['function'] == 'loadProgress') {
+           if (kDebugMode) print('RunAnywhere: Load Progress: ${data['result']}');
+        }
+    });
 
     _isInitialized = true;
   }
 
-  /// Get active task ID for a given URL
+  /// Get existing task ID for a URL
   Future<String?> getTaskIdForUrl(String url) async {
+    if (!_isInitialized) await initialize();
+    
     final tasks = await FlutterDownloader.loadTasks();
     if (tasks == null) return null;
     
-    try {
-        final task = tasks.firstWhere((t) => t.url == url && (
-            t.status == DownloadTaskStatus.running || 
-            t.status == DownloadTaskStatus.enqueued ||
-            t.status == DownloadTaskStatus.paused
-        ));
+    for (var task in tasks) {
+      if (task.url == url && 
+          (task.status == DownloadTaskStatus.running || 
+           task.status == DownloadTaskStatus.paused ||
+           task.status == DownloadTaskStatus.enqueued)) {
         return task.taskId;
-    } catch (e) {
-        return null;
+      }
     }
+    return null;
   }
 
-  /// Load model into memory
+  /// Load a model from the given path
   Future<void> loadModel(String modelPath) async {
     if (!_isInitialized) await initialize();
     
-    String finalPath = modelPath;
-
-    // Handle Asset Path
-    if (modelPath.startsWith('assets/')) {
-       final docsDir = await getApplicationDocumentsDirectory();
-       final filename = modelPath.split('/').last;
-       final file = File('${docsDir.path}/$filename');
-      
-      if (!await file.exists()) {
-        if (kDebugMode) print('Copying model from assets to ${file.path}...');
-        try {
-          final byteData = await rootBundle.load(modelPath);
-          await file.writeAsBytes(byteData.buffer.asUint8List(
-            byteData.offsetInBytes, 
-            byteData.lengthInBytes
-          ));
-        } catch (e) {
-          throw Exception('Failed to load model asset: $modelPath. Details: $e');
-        }
-      }
-      finalPath = file.path;
-    }
-    
-    // Check if path exists, if not, try appending the correct base directory
-    if (!File(finalPath).existsSync()) {
-        // If passed just a filename or relative path, try to find it in our storage dir
-         final docsDir = await getApplicationDocumentsDirectory();
-         final alternatePath = "${docsDir.path}/${finalPath.split('/').last}";
-         
-         if (File(alternatePath).existsSync()) {
-            finalPath = alternatePath;
-         } else {
-             await Future.delayed(const Duration(seconds: 1));
-             if (!File(finalPath).existsSync()) {
-                 print("Critical: Model not found at $finalPath or $alternatePath");
-                 throw Exception('Model file not found');
-             }
-         }
+    if (_currentModelPath == modelPath && _contextId != null) {
+      if (kDebugMode) print('RunAnywhere: Model already loaded: $modelPath');
+      return; // Already loaded
     }
 
-    // Release previous context if any
     if (_contextId != null) {
-      try {
-        await Fllama.instance()?.releaseContext(_contextId!);
-        _contextId = null;
-      } catch (e) {
-        print('Warning: Failed to release previous context: $e');
-      }
+      if (kDebugMode) print('RunAnywhere: Unloading previous model');
+      Fllama.instance()?.releaseContext(_contextId!);
+      _contextId = null;
     }
-    
+
+    if (kDebugMode) print('RunAnywhere: Loading model from $modelPath');
+
     try {
-      if (kDebugMode) print('Loading Llama model from $finalPath...');
-      
+      // Check if file exists
+      final file = File(modelPath);
+      if (!await file.exists()) {
+        throw Exception('Model file not found at $modelPath');
+      }
+
       final result = await Fllama.instance()?.initContext(
-        finalPath,
-        useMmap: true,
-        useMlock: false,
-        nGpuLayers: 0, // Default to CPU or auto
+        modelPath,
+        emitLoadProgress: true, // Useful for debugging
       );
-
-      if (result != null) {
-          if (kDebugMode) print('Init Context Result: $result');
-          // Try to find context ID from result map
-          if (result.containsKey('contextId')) {
-            _contextId = (result['contextId'] as num).toDouble();
-          } else if (result.containsKey('id')) {
-             _contextId = (result['id'] as num).toDouble();
-          } else {
-             print("Warning: Context ID not found in result keys: ${result.keys}");
-          }
+      
+      if (result != null && result.containsKey('contextId')) {
+        final id = result['contextId'];
+        if (id is double) {
+          _contextId = id;
+        } else if (id is int) {
+          _contextId = id.toDouble();
+        } else {
+           // Fallback parsing just in case
+           _contextId = double.tryParse(id.toString());
+        }
+        
+        if (_contextId != null) {
+            _currentModelPath = modelPath;
+            if (kDebugMode) print('RunAnywhere: Model loaded successfully. ID: $_contextId');
+        } else {
+             throw Exception('Failed to parse contextId from $id');
+        }
       } else {
-          throw Exception("Fllama initContext returned null");
+        throw Exception('Failed to load model context: Result was null or missing contextId');
       }
-      
-      _currentModelPath = finalPath;
-      
-      if (kDebugMode) print('Llama model loaded successfully. Context ID: $_contextId');
-      
-      // Safety check
-      if (_contextId == null) {
-          throw Exception("Failed to extract context ID from Fllama result: $result");
-      }
-
     } catch (e) {
-      print('CRITICAL: Failed to initialize Llama: $e');
-      throw Exception('Failed to load native Llama engine. Error: $e');
+      print('RunAnywhere: Load Model Failed: $e');
+      rethrow;
     }
   }
 
@@ -245,46 +228,45 @@ class RunAnywhere {
     required String prompt,
     String? systemPrompt,
     int maxTokens = 256,
-  }) async* {
+  }) {
     if (!_isInitialized) throw Exception('RunAnywhere not initialized');
     if (_contextId == null) throw Exception('No model loaded');
 
-    // Default to ChatML format (Standard for SmolLM2, Qwen, DeepSeek, TinyLlama 1.1 Chat)
-    // Format: <|im_start|>system\n{system}\n<|im_end|>\n<|im_start|>user\n{user}\n<|im_end|>\n<|im_start|>assistant\n
-    
+    // If there is an active chat, close it? Or throw?
+    // For now, we'll just overwrite it, but ideally we should only allow one at a time.
+    if (_activeChatController != null && !_activeChatController!.isClosed) {
+       _activeChatController!.close();
+    }
+
+    // Default to ChatML format
     final StringBuffer promptBuffer = StringBuffer();
-    
     if (systemPrompt != null && systemPrompt.isNotEmpty) {
       promptBuffer.write('<|im_start|>system\n$systemPrompt\n<|im_end|>\n');
     }
-    
     promptBuffer.write('<|im_start|>user\n$prompt\n<|im_end|>\n');
     promptBuffer.write('<|im_start|>assistant\n');
-    
     final fullPrompt = promptBuffer.toString();
     
-    if (kDebugMode) {
-      print('RunAnywhere: Sending Prompt: $fullPrompt');
-    }
+    if (kDebugMode) print('RunAnywhere: Sending Prompt: $fullPrompt');
 
-    final controller = StreamController<String>();
+    // Create a controller to stream tokens as they arrive
+    _activeChatController = StreamController<String>();
+    final controller = _activeChatController!;
+
+    // Start inference asynchronously
+    _runInference(controller, fullPrompt, maxTokens);
     
-    // Listen to global token stream
-    final subscription = Fllama.instance()?.onTokenStream?.listen((data) {
-        if (data.containsKey('token')) {
-            final token = data['token'] as String?;
-            if (token != null) {
-                if (kDebugMode) stdout.write(token); // Log tokens inline
-                controller.add(token);
-            }
-        }
-    });
+    return controller.stream;
+  }
 
+  Future<void> _runInference(StreamController<String> controller, String fullPrompt, int maxTokens) async {
     try {
+      // NOTE: Listener is already active in initialize()
+
       await Fllama.instance()?.completion(
         _contextId!,
         prompt: fullPrompt,
-        stop: ["<|im_end|>", "<|im_start|>", "User:", "System:"], // Add ChatML stop tokens
+        stop: ["<|im_end|>", "<|im_start|>", "User:", "System:"],
         temperature: 0.7,
         topP: 0.9,
         nPredict: maxTokens,
@@ -292,14 +274,19 @@ class RunAnywhere {
       );
     } catch (e) {
       print('Error during inference: $e');
-      controller.add(" [Error: $e]");
+      if (!controller.isClosed) {
+        controller.add(" [Error: $e]");
+      }
     } finally {
       if (kDebugMode) print('\nRunAnywhere: Generation Complete');
-      await subscription?.cancel();
-      controller.close();
+      // Do NOT cancel the global subscription
+      if (!controller.isClosed) {
+        await controller.close();
+      }
+      if (_activeChatController == controller) {
+        _activeChatController = null;
+      }
     }
-    
-    yield* controller.stream;
   }
 
   /// Generate embeddings for a given text
@@ -309,6 +296,7 @@ class RunAnywhere {
   }
 
   void dispose() {
+    _tokenSubscription?.cancel();
     if (_contextId != null) {
         Fllama.instance()?.releaseContext(_contextId!);
         _contextId = null;

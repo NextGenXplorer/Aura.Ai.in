@@ -72,56 +72,34 @@ class ChatNotifier extends StateNotifier<ChatState> {
     );
 
     try {
-      final intentService = _ref.read(intentDetectionServiceProvider);
-      final memoryService = _ref.read(memoryServiceProvider);
-      final documentService = _ref.read(documentServiceProvider);
-      final contextBuilder = _ref.read(contextBuilderServiceProvider);
-      final llmService = _ref.read(llmServiceProvider);
-
-      // 2. Detect Intent
-      // In a real app, we'd check if specific documents are active/selected.
-      // For now, we assume global document context access if any exist.
-      final intent = intentService.detectIntent(text, hasDocuments: true);
-
-      if (intent == IntentType.storeMemory) {
-        // --- MEMORY STORE FLOW ---
-        final contentToSave = intentService.extractMemoryContent(text);
-        await memoryService.saveMemory(contentToSave);
-        
-        // Update UI directly without LLM
-        _updateLastMessage("I've saved that to your permanent memory.");
+      final orchestrator = _ref.read(orchestratorServiceProvider);
       
-      } else {
-        // --- CHAT / RAG FLOW ---
-        
-        // Build Prompt (Includes RAG & Memory retrieval internally)
-        // Limit to last 3 messages for performance
-        final allHistory = state.messages
+      // Get chat history for context
+      final allHistory = state.messages
             .where((m) => m['role'] == 'user' || m['role'] == 'assistant')
             .map((m) => "${m['role'] == 'user' ? 'User' : 'Assistant'}: ${m['content']}")
             .toList();
-        final history = allHistory.length > 3 
-            ? allHistory.sublist(allHistory.length - 3) 
-            : allHistory;
+            
+      // Limit history to last 10 messages to avoid context overflow, 
+      // but Orchestrator handles specific pruning too.
+      final history = allHistory.length > 5 
+          ? allHistory.sublist(allHistory.length - 5) 
+          : allHistory;
 
-        final fullPrompt = await contextBuilder.buildPrompt(
-          userMessage: text,
-          chatHistory: history,
-          includeMemories: intent == IntentType.retrieveMemory || intent == IntentType.normalChat,
-          includeDocuments: intent == IntentType.queryDocument || intent == IntentType.normalChat,
-        );
+      // Delegate to Orchestrator
+      print("ChatNotifier: Delegating message to Orchestrator");
+      final stream = orchestrator.processMessage(
+        message: text, 
+        chatHistory: history,
+        hasDocuments: true // Assuming active for now
+      );
 
-        // Stream Response
-        final stream = llmService.chat(text, systemPrompt: fullPrompt);
-        
-        String fullResponse = '';
-        await for (final chunk in stream) {
-          fullResponse += chunk;
-          _updateLastMessage(fullResponse);
-        }
-        
-        // Save to history automatically via state update
+      String fullResponse = '';
+      await for (final chunk in stream) {
+        fullResponse += chunk;
+        _updateLastMessage(fullResponse);
       }
+      print('ChatNotifier: Stream completed. Full response length: ${fullResponse.length}');
 
     } catch (e) {
       print('Error in sendMessage: $e');

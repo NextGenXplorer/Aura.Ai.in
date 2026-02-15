@@ -1,4 +1,5 @@
 import 'package:aura_mobile/core/providers/ai_providers.dart';
+import 'package:aura_mobile/features/agents/application/search_agent.dart';
 import 'package:aura_mobile/data/datasources/llm_service.dart';
 import 'package:aura_mobile/domain/services/context_builder_service.dart';
 import 'package:aura_mobile/domain/services/document_service.dart';
@@ -12,6 +13,7 @@ final orchestratorServiceProvider = Provider((ref) => OrchestratorService(
   ref.read(documentServiceProvider),
   ref.read(contextBuilderServiceProvider),
   ref.read(llmServiceProvider),
+  ref.read(searchAgentProvider),
 ));
 
 class OrchestratorService {
@@ -20,11 +22,7 @@ class OrchestratorService {
   final DocumentService _documentService;
   final ContextBuilderService _contextBuilder;
   final LLMService _llmService;
-
-  // Keep track of internal history if needed, or pass it in. 
-  // For now, we assume the UI provider manages the history list and passes it here,
-  // OR we manage it here. The prompt requires "Recent Chat History".
-  // Let's accept it as an argument to keep this service stateless-ish.
+  final SearchAgent _searchAgent;
 
   OrchestratorService(
     this._intentService,
@@ -32,6 +30,7 @@ class OrchestratorService {
     this._documentService,
     this._contextBuilder,
     this._llmService,
+    this._searchAgent,
   );
 
   Stream<String> processMessage({
@@ -40,7 +39,7 @@ class OrchestratorService {
     bool hasDocuments = false, // passed from UI state
   }) async* {
     // 1. Intent Detection
-    final intent = _intentService.detectIntent(message, hasDocuments: hasDocuments);
+    final intent = await _intentService.detectIntent(message, hasDocuments: hasDocuments);
 
     // 2. Routing
     switch (intent) {
@@ -55,6 +54,13 @@ class OrchestratorService {
 
       case IntentType.queryDocument:
         yield* _handleLLMFlow(message, chatHistory, includeMemories: false, includeDocuments: true);
+        break;
+
+      case IntentType.webSearch:
+        print("ORCHESTRATOR: Routing to SearchAgent");
+        // Strip prefix if present
+        final query = message.replaceFirst("[SEARCH]", "").trim();
+        yield* _searchAgent.process(query);
         break;
 
       case IntentType.normalChat:

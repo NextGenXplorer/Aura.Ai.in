@@ -5,6 +5,7 @@ enum IntentType {
   storeMemory,
   retrieveMemory,
   queryDocument,
+  webSearch,
 }
 
 final intentDetectionServiceProvider = Provider((ref) => IntentDetectionService());
@@ -12,8 +13,17 @@ final intentDetectionServiceProvider = Provider((ref) => IntentDetectionService(
 class IntentDetectionService {
   /// Strictly rule-based intent detection as per SuperGravity architecture.
   /// Does NOT use LLM.
-  IntentType detectIntent(String message, {bool hasDocuments = false}) {
-    final lowerMessage = message.toLowerCase();
+  Future<IntentType> detectIntent(String message, {List<Map<String, String>>? history, bool hasDocuments = false}) async {
+    print("INTENT_DETECTION: Analyzing message: '$message'");
+    final lowerMessage = message.trim().toLowerCase();
+
+    // 0. Explicit Web Search (from UI command)
+    // We'll use a prefix convention like "[SEARCH]" or just check keywords if UI doesn't inject prefix.
+    // Ideally UI should strip prefix, but if we want to detect it here:
+    if (message.startsWith("[SEARCH]")) {
+      print("INTENT_DETECTION: Detected [SEARCH] prefix -> webSearch");
+      return IntentType.webSearch;
+    }
 
     // 1. Memory Store Rules
     if (lowerMessage.startsWith("remember that") ||
@@ -33,10 +43,6 @@ class IntentDetectionService {
 
     // 3. Document Mode Rules
     // "If documents exist and similarity score high -> Document Mode"
-    // Since we can't check similarity score here without the embedding, 
-    // we use a heuristic: if we have docs and the user asks a specific question about them.
-    // We will refine this by checking if the query *actually* matches docs in the Orchestrator,
-    // but for now, we capture the *intent* to query documents.
     if (hasDocuments) {
        // Heuristic: If it's a question and we have docs, prefer checking docs.
        // Or if explicitly asking to "read" or "summarize".
@@ -46,6 +52,14 @@ class IntentDetectionService {
            lowerMessage.contains("pdf")) {
          return IntentType.queryDocument;
        }
+    }
+
+    // 4. Web Search Keywords (Fallback if not explicit)
+    if (lowerMessage.startsWith("search for") ||
+        lowerMessage.startsWith("search web") ||
+        lowerMessage.startsWith("find online") ||
+        lowerMessage.startsWith("google")) {
+      return IntentType.webSearch;
     }
 
     // Default: Normal Chat
