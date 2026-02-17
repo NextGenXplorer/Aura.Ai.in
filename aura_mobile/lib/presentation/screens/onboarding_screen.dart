@@ -7,7 +7,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:aura_mobile/ai/run_anywhere_service.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:flutter_downloader/flutter_downloader.dart';
+import 'package:aura_mobile/ai/run_anywhere_service.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class OnboardingScreen extends ConsumerStatefulWidget {
   const OnboardingScreen({super.key});
@@ -71,7 +73,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: const Color(0xFF0a0a0c), // Obsidian
       body: PageView(
         controller: _pageController,
         physics: const NeverScrollableScrollPhysics(),
@@ -90,17 +92,21 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.shield_moon, size: 80, color: Color(0xFFD4AF37)),
+          const Icon(Icons.shield_moon, size: 80, color: Color(0xFFc69c3a)), // Premium Gold
           const SizedBox(height: 24),
-          const Text(
+          Text(
             "Welcome to AURA",
-            style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
+            style: GoogleFonts.outfit(
+              color: Colors.white, 
+              fontSize: 32, 
+              fontWeight: FontWeight.bold
+            ),
           ),
           const SizedBox(height: 16),
-          const Text(
+          Text(
             "Your private, offline AI assistant.\nLet's get to know you.",
             textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey, fontSize: 16),
+            style: GoogleFonts.outfit(color: Colors.white70, fontSize: 16),
           ),
           const SizedBox(height: 48),
           TextField(
@@ -126,11 +132,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               }
             },
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFD4AF37),
+              backgroundColor: const Color(0xFFc69c3a), // Premium Gold
               foregroundColor: Colors.black,
               minimumSize: const Size(double.infinity, 50),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
-            child: const Text("Next"),
+            child: Text("Next", style: GoogleFonts.outfit(fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -306,6 +313,20 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   String downloadStatusText = "Starting...";
 
   Future<void> _startDownload(ModelInfo model) async {
+    // 1. Request Notification Permission (Android 13+)
+    var status = await Permission.notification.status;
+    if (!status.isGranted) {
+      status = await Permission.notification.request();
+      if (!status.isGranted) {
+         // Show warning but proceed (download might still work in background, just no notif)
+         if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Warning: Notifications disabled. Download will run silently in background.")),
+            );
+         }
+      }
+    }
+
     setState(() {
       _isDownloading = true;
       _downloadProgress = 0;
@@ -322,7 +343,15 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
        final filePath = "${directory.path}/${model.fileName}";
        
-       // Start Download via RunAnywhere (which wraps FlutterDownloader)
+       // Start Download via RunAnywhere (which wraps Workmanager)
+       // Debug Print
+       print("DEBUG: Requesting download for ${model.url} to $filePath");
+       if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text("Download Request Sent: ${model.name}")),
+          );
+       }
+
        final taskId = await RunAnywhere().downloadModel(model.url, filePath);
        
        if (taskId != null) {
@@ -330,18 +359,22 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           
           // Listen to updates
           RunAnywhere().downloadUpdates.listen((update) {
+             print("DEBUG: UI Received Update: ${update.id} - ${update.status} - ${update.progress}");
              if (update.id == taskId) {
                 if (mounted) {
                    setState(() {
                       _downloadProgress = update.progress;
                       if (update.status == DownloadTaskStatus.running) {
-                         downloadStatusText = "Downloading...";
+                         downloadStatusText = "Downloading... ${update.progress}%";
                       } else if (update.status == DownloadTaskStatus.complete) {
-                         downloadStatusText = "Verifying...";
+                         downloadStatusText = "Finalizing...";
                          _finalizeOnboarding(model, filePath);
                       } else if (update.status == DownloadTaskStatus.failed) {
                          downloadStatusText = "Failed. Retrying...";
                          _isDownloading = false;
+                         ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text("Download Failed. Please check internet connection.")),
+                         );
                       }
                    });
                 }
@@ -355,6 +388,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             _isDownloading = false;
             downloadStatusText = "Error: $e";
          });
+         ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Error starting download: $e")),
+         );
        }
     }
   }

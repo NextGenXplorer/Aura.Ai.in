@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <application
         android:label="aura_mobile"
         android:name="${applicationName}"
@@ -41,22 +42,8 @@
             android:name="flutterEmbedding"
             android:value="2" />
         
-        <provider
-            android:name="vn.hunghd.flutterdownloader.DownloadedFileProvider"
-            android:authorities="${applicationId}.flutter_downloader.provider"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/provider_paths"/>
-        </provider>
-
-        <!-- WorkManager for Flutter Downloader -->
-        <service
-            android:name="androidx.work.impl.foreground.SystemForegroundService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false"
-            tools:node="merge" />
+        <!-- WorkManager Service (Handled by workmanager package automatically, but explicit declaration helps if merge issues occur) -->
+        <!-- Note: workmanager plugin adds its own service definitions. We generally don't need to duplicate unless customizing. -->
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

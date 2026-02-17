@@ -4,18 +4,8 @@ import 'package:aura_mobile/core/services/notification_service.dart';
 import 'package:aura_mobile/data/datasources/database_helper.dart';
 import 'package:aura_mobile/data/repositories/memory_repository_impl.dart';
 
-/// Background task handler for daily summary
-@pragma('vm:entry-point')
-void callbackDispatcher() {
-  Workmanager().executeTask((task, inputData) async {
-    if (task == 'dailySummaryTask') {
-      await _checkAndScheduleDailySummary();
-    }
-    return Future.value(true);
-  });
-}
-
-Future<void> _checkAndScheduleDailySummary() async {
+/// Background task handler logic for daily summary
+Future<void> checkAndScheduleDailySummary() async {
   final notificationService = NotificationService();
   await notificationService.initialize();
 
@@ -41,10 +31,7 @@ Future<void> _checkAndScheduleDailySummary() async {
 class DailySummaryScheduler {
   /// Initialize daily summary background task
   static Future<void> initialize() async {
-    await Workmanager().initialize(
-      callbackDispatcher,
-      isInDebugMode: false,
-    );
+    // Workmanager is initialized in main.dart with a central callbackDispatcher
 
     // Schedule daily task at 8 PM
     await Workmanager().registerPeriodicTask(

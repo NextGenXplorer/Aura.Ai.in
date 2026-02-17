@@ -30,8 +30,8 @@ class ModelRecommendationService {
     }
 
     return modelCatalog.where((m) {
-        // ALWAYS include SmolLM & TinyLlama & Qwen as base options
-        if (m.id == 'smollm2-360m' || m.id == 'tinyllama-1.1b' || m.id == 'qwen2-500m') return true;
+        // ALWAYS include Qwen 2.5 0.5B & 1.5B as base options
+        if (m.id == 'qwen2.5-0.5b' || m.id == 'qwen2.5-1.5b') return true;
         
         // For others, check minRamMB against our "Safe Max"
         return m.minRamMB <= safeMaxRamUsage;

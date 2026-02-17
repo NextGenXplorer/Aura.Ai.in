@@ -1,0 +1,64 @@
+﻿Running Gradle task 'assembleRelease'...                        
+flutter : lib/main.dart:22:5: Error: 
+'callbackDispatcher' is imported from 
+both 'package:aura_mobile/ai/download_work
+er.dart' and 'package:aura_mobile/core/ser
+vices/daily_summary_scheduler.dart'.
+At line:1 char:1
++ flutter build apk --release > 
+build_log.txt 2>&1
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~
+    + CategoryInfo          : NotSpecifie 
+   d: (lib/main.dart:2...cheduler.dart'.  
+  :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeComma 
+   ndError
+ 
+    callbackDispatcher, 
+    ^^^^^^^^^^^^^^^^^^
+lib/ai/download_worker.dart:113:9: Error: 
+No named parameter with the name 'verify'.
+        verify: true, // Verification 
+check 
+        ^^^^^^
+../../../../AppData/Local/Pub/Cache/hosted
+/pub.dev/flutter_local_notifications-17.2.
+4/lib/src/platform_specifics/android/notif
+ication_details.dart:101:9: Context: 
+Found this candidate, but the arguments 
+don't match.
+  const AndroidNotificationDetails(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+lib/ai/run_anywhere_service.dart:100:24: 
+Error: Enums can't be instantiated.
+        backoffPolicy: 
+BackoffPolicy(BackoffPolicyType.linear, 
+Duration(seconds: 10)),
+                       ^^^^^^^^^^^^^
+Target kernel_snapshot_program failed: 
+Exception
+
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task 
+':app:compileFlutterBuildRelease'.
+> Process 'command 
+'C:\flutter\bin\flutter.bat'' finished 
+with non-zero exit value 1
+
+* Try:
+> Run with --stacktrace option to get the 
+stack trace.
+> Run with --info or --debug option to 
+get more log output.
+> Run with --scan to get full insights.
+> Get more help at 
+https://help.gradle.org.
+
+BUILD FAILED in 20s
+Running Gradle task 'assembleRelease'...                           21.2s
+Gradle task assembleRelease failed with 
+exit code 1

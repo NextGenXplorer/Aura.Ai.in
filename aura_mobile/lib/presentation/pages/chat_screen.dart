@@ -1,10 +1,14 @@
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:aura_mobile/presentation/providers/chat_provider.dart';
 import 'package:aura_mobile/presentation/providers/model_selector_provider.dart';
-import 'package:aura_mobile/presentation/pages/model_selector_screen.dart';
+import 'package:aura_mobile/presentation/widgets/app_drawer.dart';
+import 'package:aura_mobile/presentation/widgets/greeting_widget.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:aura_mobile/presentation/widgets/code_element_builder.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
@@ -39,49 +43,116 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF0a0a0c), // Obsidian
+      drawer: const AppDrawer(), // Sidebar Implementation
+      extendBodyBehindAppBar: true, // Transparent AppBar effect
       appBar: AppBar(
         title: Consumer(
-          builder: (context, ref, _) {
+          builder: (context, ref, child) {
             final modelState = ref.watch(modelSelectorProvider);
-            final activeModel = modelState.activeModelId != null
-                ? modelState.availableModels.firstWhere(
-                    (m) => m.id == modelState.activeModelId,
-                    orElse: () => modelState.availableModels.first,
-                  )
-                : null;
-            
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'AURA Mobile',
-                  style: TextStyle(color: Color(0xFFe6cf8e), fontSize: 18),
-                ),
-                if (activeModel != null)
-                  Text(
-                    activeModel.name,
-                    style: const TextStyle(
-                      color: Colors.white54,
-                      fontSize: 12,
+            // Handle loading/initial state
+            if (modelState.activeModelId == null) {
+                 return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1a1a20),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white10),
                     ),
+                    child: Text(
+                      "Loading...",
+                      style: GoogleFonts.outfit(
+                        color: Colors.white54,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                 );
+            }
+
+            final activeModel = modelState.availableModels.firstWhere(
+              (m) => m.id == modelState.activeModelId,
+              orElse: () => modelState.availableModels.first,
+            );
+            
+            return GestureDetector(
+              onTap: () {
+                 Scaffold.of(context).openDrawer(); 
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1a1a20),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Text(
+                  activeModel.name,
+                  style: GoogleFonts.outfit(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
                   ),
-              ],
+                ),
+              ),
             );
           },
         ),
-        backgroundColor: const Color(0xFF141418), // Obsidian Light
+        centerTitle: true,
+        backgroundColor: const Color(0xFF0a0a0c).withOpacity(0.7), // Semi-transparent Obsidian
         elevation: 0,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.psychology, color: Color(0xFFc69c3a)),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => const ModelSelectorScreen(),
+        leading: Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: CircleAvatar(
+                backgroundColor: const Color(0xFF1a1a20),
+                child: Builder(
+                  builder: (context) {
+                    return IconButton(
+                        icon: const Icon(Icons.menu, color: Colors.white70, size: 20),
+                        onPressed: () => Scaffold.of(context).openDrawer(),
+                    );
+                  }
                 ),
-              );
-            },
+            ),
+        ),
+        flexibleSpace: ClipRRect(
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: Container(color: Colors.transparent),
           ),
+        ),
+        actions: [
+            Padding(
+                padding: const EdgeInsets.only(right: 8.0),
+                 child: CircleAvatar(
+                    backgroundColor: const Color(0xFF1a1a20),
+                    child: IconButton(
+                        icon: const Icon(Icons.add, color: Colors.white70, size: 20),
+                        tooltip: "New Chat",
+                        onPressed: () {
+                          // Clear chat history
+                          ref.read(chatProvider.notifier).clearChat();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text("New chat started"), duration: Duration(seconds: 1)),
+                          );
+                        },
+                    ),
+                ),
+            ),
+             Padding(
+                padding: const EdgeInsets.only(right: 16.0),
+                 child: CircleAvatar(
+                    backgroundColor: const Color(0xFF1a1a20),
+                    child: IconButton(
+                        icon: const Icon(Icons.more_horiz, color: Colors.white70, size: 20),
+                         tooltip: "Options",
+                        onPressed: () {
+                           ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text("Settings coming soon!"), duration: Duration(seconds: 1)),
+                          );
+                        },
+                    ),
+                ),
+            ),
         ],
       ),
       body: Column(
@@ -93,22 +164,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                  Positioned.fill(
                    child: chatState.messages.isEmpty
                     ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.chat_bubble_outline, size: 64, color: Colors.white24),
-                            const SizedBox(height: 16),
-                            Text(
-                              'Welcome to AURA\nI am ready to help.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: Colors.white.withValues(alpha: 0.2), fontSize: 16),
-                            ),
-                          ],
+                        child: SingleChildScrollView(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                            child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const SizedBox(height: 60), // Offset for transparent AppBar
+                              SizedBox(width: double.infinity, child: GreetingWidget()), // Dynamic Greeting
+                            ],
+                          ),
+                        ),
                         ),
                       )
                     : ListView.builder(
                         controller: _scrollController,
-                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 80), // Extra bottom padding for menu space
+                        padding: const EdgeInsets.fromLTRB(16, 100, 16, 80), // Top padding for AppBar
                         itemCount: chatState.messages.length,
                         itemBuilder: (context, index) {
                           final msg = chatState.messages[index];
@@ -116,25 +187,41 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           return Align(
                             alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
                             child: Container(
-                              margin: const EdgeInsets.symmetric(vertical: 4),
-                              padding: const EdgeInsets.all(12),
+                              margin: const EdgeInsets.symmetric(vertical: 8), // Increased spacing
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
                               decoration: BoxDecoration(
-                                color: isUser ? const Color(0xFF2a2a30) : const Color(0xFF1a1a20),
-                                borderRadius: BorderRadius.circular(12).copyWith(
-                                  bottomRight: isUser ? Radius.zero : null,
-                                  bottomLeft: !isUser ? Radius.zero : null,
+                                color: isUser ? const Color(0xFF2a2a30) : Colors.transparent, // Assistant is transparent/clean
+                                borderRadius: BorderRadius.circular(20).copyWith(
+                                  bottomRight: isUser ? Radius.zero : const Radius.circular(20),
+                                  bottomLeft: !isUser ? Radius.zero : const Radius.circular(20),
                                 ),
-                                border: Border.all(
-                                  color: const Color(0xFFc69c3a).withValues(alpha: 0.2),
-                                ),
+                                border: isUser 
+                                    ? Border.all(color: const Color(0xFFc69c3a).withOpacity(0.3)) 
+                                    : null, // Only user has border/box
                               ),
                               child: MarkdownBody(
                                 data: msg['content'] ?? '',
+                                builders: {
+                                  'code': CodeElementBuilder(context),
+                                },
                                 styleSheet: MarkdownStyleSheet(
-                                  p: const TextStyle(color: Colors.white70),
+                                  p: TextStyle(
+                                    color: isUser ? Colors.white : Colors.white.withOpacity(0.9),
+                                    fontSize: 16,
+                                    height: 1.5,
+                                    fontFamily: GoogleFonts.outfit().fontFamily,
+                                  ),
                                   strong: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                                   a: const TextStyle(color: Color(0xFFc69c3a), decoration: TextDecoration.underline),
-                                  code: const TextStyle(color: Color(0xFFe6cf8e), backgroundColor: Color(0xFF2a2a30), fontFamily: 'monospace'),
+                                  // Code block styling is now handled by CodeElementBuilder
+                                  // Inline code styling:
+                                  code: const TextStyle(
+                                      color: Color(0xFFe6cf8e), 
+                                      backgroundColor: Color(0xFF1a1a20), 
+                                      fontFamily: 'monospace',
+                                      fontSize: 14,
+                                  ),
                                 ),
                                 onTapLink: (text, href, title) async {
                                   if (href != null) {
@@ -165,13 +252,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     child: Container(
                       padding: const EdgeInsets.all(4),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF1a1a20), // Dark background matching theme
-                        borderRadius: BorderRadius.circular(12),
+                        color: const Color(0xFF1a1a20), // Dark background
+                        borderRadius: BorderRadius.circular(16),
                         border: Border.all(color: const Color(0xFFc69c3a), width: 1), // Gold border
                         boxShadow: [
                           BoxShadow(
                             color: Colors.black.withOpacity(0.5),
-                            blurRadius: 8,
+                            blurRadius: 10,
                             offset: const Offset(0, 4),
                           ),
                         ],
@@ -183,10 +270,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           children: [
                             ListTile(
                               leading: const Icon(Icons.public, color: Color(0xFFc69c3a)),
-                              title: const Text('Web Search', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                              subtitle: const Text('Search the internet for real-time info', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                              title: Text('Web Search', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold)),
+                              subtitle: Text('Search the internet for real-time info', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 12)),
                               onTap: () {
-                                print("CHAT_SCREEN: Web Search selected from Floating Menu");
                                 setState(() {
                                   _isWebSearchMode = true;
                                   _showCommandMenu = false;
@@ -203,96 +289,100 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
           ),
           if (chatState.isThinking)
-            const Padding(
-              padding: EdgeInsets.all(8.0),
-              child: LinearProgressIndicator(
-                backgroundColor: Colors.transparent,
-                color: Color(0xFFc69c3a),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+              child: Row(
+                children: [
+                   const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFc69c3a))),
+                   const SizedBox(width: 12),
+                   Text("Thinking...", style: GoogleFonts.outfit(color: Colors.white54, fontSize: 12)),
+                ],
               ),
             ),
+          
+          // Input Area
           Container(
-            padding: const EdgeInsets.all(16),
-            color: const Color(0xFF141418),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+            decoration: const BoxDecoration(
+              color: Color(0xFF0a0a0c),
+              border: Border(top: BorderSide(color: Colors.white10)),
+            ),
             child: Row(
               children: [
                 Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      hintText: _isWebSearchMode ? 'Search the web...' : 'Ask AURA...',
-                      hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
-                      prefixIcon: _isWebSearchMode 
-                          ? IconButton(
-                              icon: const Icon(Icons.public, color: Color(0xFFc69c3a)),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1a1a20),
+                      borderRadius: BorderRadius.circular(30),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 12),
+                        if (_isWebSearchMode)
+                           IconButton(
+                              icon: const Icon(Icons.public_off, color: Color(0xFFc69c3a), size: 20),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
                               onPressed: () {
                                 setState(() {
                                   _isWebSearchMode = false;
                                 });
                               },
-                              tooltip: 'Cancel Search Mode',
-                            ) 
-                          : null,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: BorderSide.none,
+                          )
+                        else
+                          const Icon(Icons.add, color: Colors.white54),
+                        
+                        Expanded(
+                          child: TextField(
+                            controller: _controller,
+                            style: GoogleFonts.outfit(color: Colors.white),
+                            decoration: InputDecoration(
+                              hintText: _isWebSearchMode ? 'Search the web...' : 'Ask Aura...',
+                              hintStyle: GoogleFonts.outfit(color: Colors.white30),
+                              border: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                            ),
+                            onChanged: (value) {
+                               final shouldShow = value.trim().startsWith('/') || value.trim().startsWith('@');
+                               if (_showCommandMenu != shouldShow) {
+                                  setState(() {
+                                    _showCommandMenu = shouldShow;
+                                  });
+                               }
+                            },
+                            onSubmitted: (value) => _sendMessage(value),
+                          ),
+                        ),
+                        IconButton(
+                          icon: Icon(chatState.isListening ? Icons.mic_off : Icons.mic, color: Colors.white54),
+                          onPressed: () {
+                            if (chatState.isListening) {
+                              ref.read(chatProvider.notifier).stopListening();
+                            } else {
+                              ref.read(chatProvider.notifier).startListening();
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                GestureDetector(
+                  onTap: () => _sendMessage(_controller.text),
+                  child: Container(
+                    width: 50,
+                    height: 50,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        colors: [Color(0xFFe6cf8e), Color(0xFFc69c3a)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
                       ),
-                      filled: true,
-                      fillColor: const Color(0xFF0a0a0c),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                     ),
-                    onChanged: (value) {
-                       final shouldShow = value.trim().startsWith('/') || value.trim().startsWith('@');
-                       if (_showCommandMenu != shouldShow) {
-                          print("CHAT_SCREEN: Menu State Changed to $shouldShow");
-                          setState(() {
-                            _showCommandMenu = shouldShow;
-                          });
-                       }
-                    },
-                    onSubmitted: (value) {
-                       if (value.trim().isNotEmpty) {
-                        final messageToSend = _isWebSearchMode ? "[SEARCH] $value" : value;
-                        ref.read(chatProvider.notifier).sendMessage(messageToSend);
-                        _controller.clear();
-                        setState(() {
-                          _isWebSearchMode = false;
-                           // Don't hide menu here, onChanged handles it but clearing text will hide it
-                        });
-                      }
-                    },
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton(
-                  icon: Icon(chatState.isListening ? Icons.mic_off : Icons.mic, color: const Color(0xFFc69c3a)),
-                  onPressed: () {
-                    if (chatState.isListening) {
-                      ref.read(chatProvider.notifier).stopListening();
-                    } else {
-                      ref.read(chatProvider.notifier).startListening();
-                    }
-                  },
-                ),
-                Container(
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      colors: [Color(0xFFe6cf8e), Color(0xFFc69c3a)],
-                    ),
-                  ),
-                  child: IconButton(
-                    icon: const Icon(Icons.send, color: Color(0xFF0a0a0c)),
-                    onPressed: () {
-                      if (_controller.text.trim().isNotEmpty) {
-                        final messageToSend = _isWebSearchMode ? "[SEARCH] ${_controller.text}" : _controller.text;
-                        ref.read(chatProvider.notifier).sendMessage(messageToSend);
-                        _controller.clear();
-                        setState(() {
-                          _isWebSearchMode = false;
-                        });
-                      }
-                    },
+                    child: const Icon(Icons.arrow_upward, color: Colors.black),
                   ),
                 ),
               ],
@@ -300,6 +390,30 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  void _sendMessage(String text) {
+     if (text.trim().isNotEmpty) {
+      final messageToSend = _isWebSearchMode ? "[SEARCH] $text" : text;
+      ref.read(chatProvider.notifier).sendMessage(messageToSend);
+      _controller.clear();
+      setState(() {
+        _isWebSearchMode = false;
+         // Toggle menu off
+      });
+    }
+  }
+
+  Widget _buildSuggestionChip(String label) {
+    return ActionChip(
+      label: Text(label, style: GoogleFonts.outfit(color: Colors.white70)),
+      backgroundColor: const Color(0xFF1a1a20),
+      side: const BorderSide(color: Colors.white10),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      onPressed: () {
+        _controller.text = label;
+      },
     );
   }
 }

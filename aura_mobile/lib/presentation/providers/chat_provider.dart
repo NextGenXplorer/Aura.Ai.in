@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:aura_mobile/ai/run_anywhere_service.dart';
 import 'package:aura_mobile/data/datasources/llm_service.dart';
 import 'package:aura_mobile/domain/services/intent_detection_service.dart';
@@ -9,19 +10,36 @@ import 'package:aura_mobile/core/services/voice_service.dart';
 import 'package:aura_mobile/features/orchestrator/orchestrator_service.dart';
 import 'package:aura_mobile/core/providers/ai_providers.dart';
 
+import 'package:uuid/uuid.dart';
+import 'package:aura_mobile/domain/repositories/chat_history_repository.dart';
+import 'package:aura_mobile/core/providers/repository_providers.dart';
+import 'package:aura_mobile/presentation/providers/chat_history_provider.dart';
+
 // Voice Service
 final voiceServiceProvider = Provider((ref) => VoiceService());
 
 // Chat State
 class ChatState {
+  final String? sessionId;
   final List<Map<String, String>> messages;
   final bool isListening;
   final bool isThinking;
 
-  ChatState({this.messages = const [], this.isThinking = false, this.isListening = false});
+  ChatState({
+    this.sessionId,
+    this.messages = const [],
+    this.isThinking = false,
+    this.isListening = false,
+  });
 
-  ChatState copyWith({List<Map<String, String>>? messages, bool? isThinking, bool? isListening}) {
+  ChatState copyWith({
+    String? sessionId,
+    List<Map<String, String>>? messages,
+    bool? isThinking,
+    bool? isListening,
+  }) {
     return ChatState(
+      sessionId: sessionId ?? this.sessionId,
       messages: messages ?? this.messages,
       isThinking: isThinking ?? this.isThinking,
       isListening: isListening ?? this.isListening,
@@ -32,9 +50,19 @@ class ChatState {
 class ChatNotifier extends StateNotifier<ChatState> {
   final Ref _ref;
   bool _isProcessing = false; // Mutex for concurrent call prevention
+  final _uuid = const Uuid();
 
   ChatNotifier(this._ref) : super(ChatState()) {
     _initializeAI();
+    _startNewSession();
+  }
+
+  void _startNewSession() {
+    state = state.copyWith(
+      sessionId: _uuid.v4(),
+      messages: [],
+      isThinking: false,
+    );
   }
 
   Future<void> _initializeAI() async {
@@ -42,13 +70,74 @@ class ChatNotifier extends StateNotifier<ChatState> {
       state = state.copyWith(isThinking: true);
       final llmService = _ref.read(llmServiceProvider);
       await llmService.initialize();
-      // Only load model if we know it exists, otherwise Onboarding should have handled it.
-      // For now, we assume it's there or will be loaded by UI.
-      // await llmService.loadModel('assets/models/smollm2-360m.gguf'); 
+      
+      // Auto-load last selected model
+      final prefs = await SharedPreferences.getInstance();
+      final modelPath = prefs.getString('selected_model_path');
+      
+      if (modelPath != null && modelPath.isNotEmpty) {
+        print('ChatNotifier: Auto-loading model from $modelPath');
+        await llmService.loadModel(modelPath);
+      } else {
+        print('ChatNotifier: No model selected. User must select a model.');
+      }
     } catch (e) {
       print('Error initializing AI: $e');
     } finally {
       state = state.copyWith(isThinking: false);
+    }
+  }
+
+  Future<void> loadSession(ChatSession session) async {
+    // Load full session logic
+    // Repository might return metadata only, check if messages are empty
+    var fullSession = session;
+    if (session.messages.isEmpty) {
+        final repo = _ref.read(chatHistoryRepositoryProvider);
+        final loaded = await repo.getSession(session.id);
+        if (loaded != null) fullSession = loaded;
+    }
+
+    state = state.copyWith(
+      sessionId: fullSession.id,
+      messages: fullSession.messages,
+    );
+  }
+
+  Future<void> _saveChat() async {
+    if (state.messages.isEmpty) return;
+    
+    try {
+      final repo = _ref.read(chatHistoryRepositoryProvider);
+      
+      // Generate a title based on the first user message if possible
+      String title = "New Chat";
+      final firstUserMsg = state.messages.firstWhere(
+        (m) => m['role'] == 'user',
+        orElse: () => {},
+      );
+      if (firstUserMsg.isNotEmpty && firstUserMsg['content'] != null) {
+        final content = firstUserMsg['content']!;
+        title = content.length > 30 ? "${content.substring(0, 30)}..." : content;
+      }
+
+      final session = ChatSession(
+        id: state.sessionId ?? _uuid.v4(),
+        title: title,
+        lastModified: DateTime.now(),
+        messages: state.messages,
+      );
+
+      // Update state ID if it was null (shouldn't be, but safe)
+      if (state.sessionId == null) {
+        state = state.copyWith(sessionId: session.id);
+      }
+
+      await repo.saveSession(session);
+      // Invalidate history provider to refresh list
+      _ref.invalidate(chatHistoryProvider);
+    } catch (e) {
+      print("Error saving chat: $e");
     }
   }
 
@@ -65,6 +154,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       messages: [...state.messages, {'role': 'user', 'content': text}],
       isThinking: true,
     );
+    _saveChat(); // Save after user message
     
     // Placeholder for Assistant Response
     state = state.copyWith(
@@ -100,6 +190,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         _updateLastMessage(fullResponse);
       }
       print('ChatNotifier: Stream completed. Full response length: ${fullResponse.length}');
+      _saveChat(); // Save after full response
 
     } catch (e) {
       print('Error in sendMessage: $e');
@@ -136,6 +227,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
         stopListening();
       }
     });
+  }
+
+  void clearChat() {
+     _startNewSession();
   }
 }
 

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_downloader/flutter_downloader.dart';
+import 'package:workmanager/workmanager.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:aura_mobile/core/services/background_service.dart';
 import 'package:aura_mobile/presentation/pages/chat_screen.dart';
 import 'package:aura_mobile/presentation/screens/onboarding_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -15,11 +17,19 @@ import 'dart:ui';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Initialize FlutterDownloader
-  await FlutterDownloader.initialize(
-    debug: true, // debug: false to disable console log
-    ignoreSsl: true // option: false to disable working with http links
+  // Initialize Workmanager
+  await Workmanager().initialize(
+    callbackDispatcher, 
+    isInDebugMode: true // If enabled it will post a notification whenever the task is running
   );
+  
+  // Initialize Local Notifications for Main Isolate (for listening/interaction if needed)
+  final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const InitializationSettings initializationSettings =
+        InitializationSettings(android: initializationSettingsAndroid);
+    await flutterLocalNotificationsPlugin.initialize(initializationSettings);
 
   // Initialize RunAnywhere to sync downloads
   try {
@@ -62,9 +72,19 @@ class AuraApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF0a0a0c),
-        textTheme: GoogleFonts.interTextTheme(
-          Theme.of(context).textTheme.apply(bodyColor: const Color(0xFFEDEDED)),
+        scaffoldBackgroundColor: const Color(0xFF0a0a0c), // Obsidian
+        primaryColor: const Color(0xFFc69c3a), // Gold
+        colorScheme: const ColorScheme.dark(
+          primary: Color(0xFFc69c3a),
+          secondary: Color(0xFFe6cf8e),
+          surface: Color(0xFF1a1a20),
+          background: Color(0xFF0a0a0c),
+        ),
+        textTheme: GoogleFonts.outfitTextTheme(
+          Theme.of(context).textTheme.apply(
+            bodyColor: const Color(0xFFEDEDED),
+            displayColor: Colors.white,
+          ),
         ),
         useMaterial3: true,
       ),

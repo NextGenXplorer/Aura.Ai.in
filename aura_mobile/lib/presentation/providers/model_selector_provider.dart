@@ -5,7 +5,7 @@ import 'package:aura_mobile/data/datasources/model_manager.dart';
 import 'package:aura_mobile/core/providers/ai_providers.dart';
 import 'package:aura_mobile/ai/run_anywhere_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_downloader/flutter_downloader.dart';
+import 'package:aura_mobile/ai/run_anywhere_service.dart';
 
 // Model Manager Provider
 final modelManagerProvider = Provider((ref) => ModelManager());
@@ -162,6 +162,33 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
 
     // Get active model candidate
     String? activeModelIdCandidate = prefs.getString('active_model_id');
+    
+    // Fallback: Check for path-based selection (from Onboarding) if ID is missing
+    if (activeModelIdCandidate == null) {
+       final path = prefs.getString('selected_model_path');
+       if (path != null) {
+          // Try to map path back to ID
+          try {
+             final model = modelCatalog.firstWhere((m) => path.contains(m.fileName) || path.contains(m.id), orElse: () => modelCatalog.first);
+             // Better: we can't easily map path to ID without knowing storage logic perfectly.
+             // But we can check if any downloaded model has this path
+             for (final mId in downloadedIds) {
+                 final mPath = await modelManager.getModelPath(mId);
+                 if (mPath == path) {
+                    activeModelIdCandidate = mId;
+                    break;
+                 }
+             }
+             // Fallback heuristic if not in downloadedIds (e.g. manual file)
+             if (activeModelIdCandidate == null && path.contains(model.fileName)) {
+                activeModelIdCandidate = model.id;
+             }
+          } catch (e) {
+             print("Error mapping path to ID: $e");
+          }
+       }
+    }
+
     if (activeModelIdCandidate != null && !downloadedIds.contains(activeModelIdCandidate)) {
         activeModelIdCandidate = null;
         await prefs.remove('active_model_id');
@@ -291,6 +318,7 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
       // Save as active model
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('active_model_id', modelId);
+      await prefs.setString('selected_model_path', modelPath); // Synced with ChatNotifier
 
       state = state.copyWith(activeModelId: modelId);
     } catch (e) {

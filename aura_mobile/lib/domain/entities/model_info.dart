@@ -34,80 +34,47 @@ class ModelInfo {
 // Model Catalog
 final List<ModelInfo> modelCatalog = [
   ModelInfo(
-    id: 'smollm2-360m',
-    name: 'SmolLM2 360M',
-    description: 'Ultra-fast, minimal RAM usage. Best for quick responses.',
-    url: 'https://hf-mirror.com/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf?download=true',
-    fileName: 'smollm2-360m.gguf',
-    sizeBytes: 209715200, // 200MB
-    ramRequirement: '1GB',
-    minRamMB: 1024,
+    id: 'qwen2.5-0.5b',
+    name: 'Qwen 2.5 0.5B',
+    description: 'Ultra-fast, lightweight. Ideal for older devices.',
+    url: 'https://hf-mirror.com/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf?download=true',
+    fileName: 'qwen2.5-0.5b-instruct-q4_k_m.gguf',
+    sizeBytes: 397000000, // ~380MB
+    ramRequirement: '1.5GB',
+    minRamMB: 1536,
     speed: 'Very Fast',
   ),
   ModelInfo(
-    id: 'qwen2-500m',
-    name: 'Qwen2 500M',
-    description: 'Balanced speed and quality. Good for general chat.',
-    url: 'https://hf-mirror.com/Qwen/Qwen2-0.5B-Instruct-GGUF/resolve/main/qwen2-0_5b-instruct-q4_k_m.gguf?download=true',
-    fileName: 'qwen2-500m.gguf',
-    sizeBytes: 314572800, // 300MB
-    ramRequirement: '1.5GB',
-    minRamMB: 1536,
+    id: 'qwen2.5-1.5b',
+    name: 'Qwen 2.5 1.5B',
+    description: 'Balanced performance. Great for general tasks.',
+    url: 'https://hf-mirror.com/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf?download=true',
+    fileName: 'qwen2.5-1.5b-instruct-q4_k_m.gguf',
+    sizeBytes: 986000000, // ~940MB
+    ramRequirement: '2.5GB',
+    minRamMB: 2560,
     speed: 'Fast',
   ),
   ModelInfo(
-    id: 'tinyllama-1.1b',
-    name: 'TinyLlama 1.1B',
-    description: 'Compact yet capable. Great for longer conversations.',
-    url: 'https://hf-mirror.com/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf?download=true',
-    fileName: 'tinyllama-1.1b.gguf',
-    sizeBytes: 669515776, // 638MB
-    ramRequirement: '2GB',
-    minRamMB: 2048,
-    speed: 'Medium',
-  ),
-  ModelInfo(
-    id: 'phi-2-1.3b',
-    name: 'Phi-2 1.3B',
-    description: 'High quality reasoning. Best for complex tasks.',
-    url: 'https://hf-mirror.com/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf?download=true',
-    fileName: 'phi-2-1.3b.gguf',
-    sizeBytes: 1782579200, // ~1.7GB (Corrected size for Q4_K_M)
+    id: 'qwen2.5-3b',
+    name: 'Qwen 2.5 3B',
+    description: 'Strong reasoning. The sweet spot for modern phones.',
+    url: 'https://hf-mirror.com/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf?download=true',
+    fileName: 'qwen2.5-3b-instruct-q4_k_m.gguf',
+    sizeBytes: 1930000000, // ~1.8GB
     ramRequirement: '4GB',
-    minRamMB: 3072, // Can run on 4GB devices with optimization
+    minRamMB: 3500, // Fits tightly in 4GB, comfortable in 6GB
     speed: 'Medium',
   ),
   ModelInfo(
-    id: 'deepseek-r1-distill-qwen-1.5b',
-    name: 'DeepSeek R1 Distill 1.5B',
-    description: 'State-of-the-art reasoning model distilled from DeepSeek R1.',
-    url: 'https://hf-mirror.com/Second-State/DeepSeek-R1-Distill-Qwen-1.5B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf?download=true',
-    fileName: 'deepseek-r1-distill-qwen-1.5b.gguf',
-    sizeBytes: 943718400, // ~900MB
-    ramRequirement: '3GB',
-    minRamMB: 3072,
-    speed: 'Fast',
-  ),
-  ModelInfo(
-    id: 'llama-3.2-3b',
-    name: 'Llama 3.2 3B',
-    description: 'Advanced reasoning and coding capabilities.',
-    url: 'https://hf-mirror.com/hugging-quants/Llama-3.2-3B-Instruct-Q4_K_M-GGUF/resolve/main/llama-3.2-3b-instruct-q4_k_m.gguf',
-    fileName: 'llama-3.2-3b.gguf',
-    sizeBytes: 2000000000, 
-    ramRequirement: '4GB', 
-    minRamMB: 4096, 
-    speed: 'Medium',
-  ),
-  ModelInfo(
-    id: 'mistral-7b',
-    name: 'Mistral 7B',
-    description: 'Desktop-class performance. Unmatched knowledge.',
-    url: 'https://hf-mirror.com/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf',
-    fileName: 'mistral-7b.gguf',
-    sizeBytes: 4300000000, 
+    id: 'qwen2.5-7b',
+    name: 'Qwen 2.5 7B',
+    description: 'Desktop-class intelligence. Requires high-end device.',
+    url: 'https://hf-mirror.com/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf?download=true',
+    fileName: 'qwen2.5-7b-instruct-q4_k_m.gguf',
+    sizeBytes: 4660000000, // ~4.3GB
     ramRequirement: '8GB',
-    minRamMB: 8192,
+    minRamMB: 7500, // Needs 8GB+ device
     speed: 'Slow',
   ),
 ];
