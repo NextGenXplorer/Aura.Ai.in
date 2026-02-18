@@ -1,4 +1,5 @@
 
+import 'package:aura_mobile/core/services/duckduckgo_service.dart';
 import 'package:aura_mobile/domain/services/document_service.dart';
 import 'package:aura_mobile/domain/services/memory_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -30,7 +31,7 @@ class ContextBuilderService {
       final memories = await _memoryService.retrieveRelevantMemories(userMessage);
       if (memories.isNotEmpty) {
         final topMemories = memories.take(3).toList();
-        buffer.writeln("\nRelevant Memories:");
+        buffer.writeln("\nRelevant Memories from your past conversations:");
         for (var mem in topMemories) {
           buffer.writeln("- $mem");
         }
@@ -41,31 +42,63 @@ class ContextBuilderService {
     if (includeDocuments) {
       final docContext = await _documentService.retrieveRelevantContext(userMessage);
       if (docContext.isNotEmpty) {
-        final topDocs = docContext.take(2).toList(); // Reduce to 2 for speed/context window
-        buffer.writeln("\nDocument Context:");
+        final topDocs = docContext.take(2).toList();
+        buffer.writeln("\nRelevant Document Context:");
         for (var chunk in topDocs) {
           buffer.writeln(chunk);
         }
       }
     }
 
-    // 4. Chat History
-    // Note: In ChatML, history should ideally be passed as separate messages, but for now we'll embed it in system 
-    // or just rely on the fact that we are only passing the 'systemPrompt' to RunAnywhere which puts it in <|im_start|>system.
-    // Putting chat history in system prompt is suboptimal but works for simple context state.
+    // 4. Chat History (LOWER PRIORITY for tool use cases)
     if (chatHistory.isNotEmpty) {
-      final limitedHistory = chatHistory.length > 5 
-          ? chatHistory.sublist(chatHistory.length - 5) 
+      buffer.writeln("\n--- PREVIOUS CONVERSATION CONTEXT (Do not repeat previous answers) ---");
+      final limitedHistory = chatHistory.length > 3 
+          ? chatHistory.sublist(chatHistory.length - 3) 
           : chatHistory;
       
-      buffer.writeln("\nPrevious Conversation:");
       for (var msg in limitedHistory) {
         buffer.writeln(msg);
       }
+      buffer.writeln("--- END OF PREVIOUS CONVERSATION ---\n");
     }
     
-    // We do NOT add the user message here. RunAnywhere adds it as <|im_start|>user
+    buffer.writeln("CURRENT USER REQUEST: \"$userMessage\"");
+    buffer.writeln("ASSISTANT RESPONSE:");
     
+    return buffer.toString();
+  }
+
+  String injectMemory(List<String> memories, String message) {
+    final buffer = StringBuffer();
+    buffer.writeln("You are AURA. The user asked: \"$message\"");
+    buffer.writeln("\nBased on the following retrieved memories, provide a helpful answer:");
+    for (var memory in memories) {
+      buffer.writeln("- $memory");
+    }
+    return buffer.toString();
+  }
+
+  String injectWeb(List<dynamic> results, String message) {
+    final buffer = StringBuffer();
+    buffer.writeln("Web Search Results for: \"$message\"");
+    for (var result in results) {
+      buffer.writeln("\nTITLE: ${result.title}");
+      buffer.writeln("CONTENT: ${result.snippet}");
+    }
+    buffer.writeln("\nTASK: Synthesize the information above to answer: \"$message\"");
+    buffer.writeln("If the results are partial, answer based on what is available. Do not explicitly say you couldn't find details unless the results are completely irrelevant.");
+    buffer.writeln("\nANSWER:");
+    return buffer.toString();
+  }
+
+  String injectURL(dynamic content, String message) {
+    final buffer = StringBuffer();
+    buffer.writeln("Webpage Content for: \"$message\"");
+    buffer.writeln("PAGE TITLE: ${content.title}");
+    buffer.writeln("PAGE EXCERPT:\n${content.snippet}");
+    buffer.writeln("\nTASK: Summarize this page to answer: \"$message\"");
+    buffer.writeln("\nANSWER:");
     return buffer.toString();
   }
 }

@@ -14,6 +14,7 @@ import 'package:uuid/uuid.dart';
 import 'package:aura_mobile/domain/repositories/chat_history_repository.dart';
 import 'package:aura_mobile/core/providers/repository_providers.dart';
 import 'package:aura_mobile/presentation/providers/chat_history_provider.dart';
+import 'package:aura_mobile/presentation/providers/model_selector_provider.dart';
 
 // Voice Service
 final voiceServiceProvider = Provider((ref) => VoiceService());
@@ -24,12 +25,16 @@ class ChatState {
   final List<Map<String, String>> messages;
   final bool isListening;
   final bool isThinking;
+  final String partialVoiceText;
+  final bool isModelLoading;
 
   ChatState({
     this.sessionId,
     this.messages = const [],
     this.isThinking = false,
     this.isListening = false,
+    this.partialVoiceText = '',
+    this.isModelLoading = false,
   });
 
   ChatState copyWith({
@@ -37,12 +42,16 @@ class ChatState {
     List<Map<String, String>>? messages,
     bool? isThinking,
     bool? isListening,
+    String? partialVoiceText,
+    bool? isModelLoading,
   }) {
     return ChatState(
       sessionId: sessionId ?? this.sessionId,
       messages: messages ?? this.messages,
       isThinking: isThinking ?? this.isThinking,
       isListening: isListening ?? this.isListening,
+      partialVoiceText: partialVoiceText ?? this.partialVoiceText,
+      isModelLoading: isModelLoading ?? this.isModelLoading,
     );
   }
 }
@@ -67,7 +76,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   Future<void> _initializeAI() async {
     try {
-      state = state.copyWith(isThinking: true);
+      state = state.copyWith(isModelLoading: true);
       final llmService = _ref.read(llmServiceProvider);
       await llmService.initialize();
       
@@ -84,7 +93,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     } catch (e) {
       print('Error initializing AI: $e');
     } finally {
-      state = state.copyWith(isThinking: false);
+      state = state.copyWith(isModelLoading: false);
     }
   }
 
@@ -142,6 +151,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   Future<void> sendMessage(String text) async {
+    // 0. Safety Checks
+    final modelState = _ref.read(modelSelectorProvider);
+    if (modelState.activeModelId == null || state.isModelLoading) {
+      print('Model not ready, ignoring message');
+      return;
+    }
+
     // Prevent concurrent LLM calls
     if (_isProcessing) {
       print('Already processing a message, ignoring new request');
@@ -218,13 +234,17 @@ class ChatNotifier extends StateNotifier<ChatState> {
   Future<void> startListening() async {
     final voiceService = _ref.read(voiceServiceProvider);
     await voiceService.initialize();
-    state = state.copyWith(isListening: true);
+    state = state.copyWith(isListening: true, partialVoiceText: '');
     
-    await voiceService.startListening(onResult: (text) {
+    await voiceService.startListening(onResult: (text, isFinal) {
       if (text.isNotEmpty) {
-        state = state.copyWith(isListening: false);
-        sendMessage(text);
-        stopListening();
+        if (isFinal) {
+          state = state.copyWith(isListening: false, partialVoiceText: '');
+          sendMessage(text);
+          stopListening();
+        } else {
+          state = state.copyWith(partialVoiceText: text);
+        }
       }
     });
   }

@@ -1,15 +1,9 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math';
-import 'dart:ui';
-import 'dart:isolate';
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:fllama/fllama.dart';
-import 'package:workmanager/workmanager.dart';
-import 'package:dio/dio.dart';
-// import 'package:aura_mobile/core/utils/download_callback.dart'; // No longer needed directly here
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:aura_mobile/core/services/foreground_service_handler.dart';
 
 /// Status of a download task
 enum DownloadTaskStatus {
@@ -36,74 +30,155 @@ class DownloadUpdate {
   DownloadUpdate(this.id, this.status, this.progress);
 }
 
-/// Simulated RunAnywhere SDK Wrapper
-/// In a real scenario, this would import the native package or platform channel.
-
-@pragma('vm:entry-point')
 class RunAnywhere {
   static final RunAnywhere _instance = RunAnywhere._internal();
-  
+
   factory RunAnywhere() => _instance;
-  
+
   RunAnywhere._internal();
 
   bool _isInitialized = false;
+  Completer<void>? _initCompleter;
   double? _contextId;
   String? _currentModelPath;
 
-  final _downloadStreamController = StreamController<DownloadUpdate>.broadcast();
-  Stream<DownloadUpdate> get downloadUpdates => _downloadStreamController.stream;
-  
-  final ReceivePort _port = ReceivePort();
+  final _downloadStreamController =
+      StreamController<DownloadUpdate>.broadcast();
+  Stream<DownloadUpdate> get downloadUpdates =>
+      _downloadStreamController.stream;
 
+  /// Initialize the engine — must be called once at app startup
+  Future<void> initialize() async {
+    if (_isInitialized) return;
+    if (_initCompleter != null) return _initCompleter!.future;
 
+    _initCompleter = Completer<void>();
+    try {
+      if (kDebugMode) print('RunAnywhere: Initializing...');
 
-  // WORKMANAGER DOWNLOAD IMPLEMENTATION
-  
-  /// Download model from URL to local path
-  /// Returns the taskId (URL in this case for simplicity in mapping)
-  Future<String?> downloadModel(String url, String destinationPath) async {
-    if (!_isInitialized) {
-        await initialize();
+    // FIX #1: Initialize FlutterForegroundTask BEFORE any service calls.
+    // Without this, startService() silently fails on Android.
+    FlutterForegroundTask.init(
+      androidNotificationOptions: AndroidNotificationOptions(
+        channelId: 'download_channel',
+        channelName: 'Model Downloads',
+        channelDescription: 'AI model download progress',
+        channelImportance: NotificationChannelImportance.LOW,
+        priority: NotificationPriority.LOW,
+        onlyAlertOnce: true,
+      ),
+      iosNotificationOptions: const IOSNotificationOptions(
+        showNotification: true,
+        playSound: false,
+      ),
+      foregroundTaskOptions: ForegroundTaskOptions(
+        eventAction: ForegroundTaskEventAction.nothing(),
+        autoRunOnBoot: false,
+        allowWakeLock: true,
+        allowWifiLock: true,
+      ),
+    );
+
+    // FIX #4: Safe type casting when receiving data from the foreground task.
+    // The platform channel may deliver values as dynamic types.
+    FlutterForegroundTask.addTaskDataCallback((data) {
+      if (data is List && data.length >= 3) {
+        try {
+          final String id = data[0].toString();
+          final int status = data[1] is int
+              ? data[1] as int
+              : int.tryParse(data[1].toString()) ?? 0;
+          final int progress = data[2] is int
+              ? data[2] as int
+              : int.tryParse(data[2].toString()) ?? 0;
+          _downloadStreamController.add(
+            DownloadUpdate(id, DownloadTaskStatus.fromInt(status), progress),
+          );
+        } catch (e) {
+          if (kDebugMode) print('RunAnywhere: Failed to parse task data: $e');
+        }
+      }
+    });
+
+    // Initialize Token Listener Globally
+    Fllama.instance()?.onTokenStream?.listen((data) {
+      if (kDebugMode) print('RunAnywhere: Stream Data: $data');
+      if (data is! Map) return;
+
+      if (data['function'] == 'completion') {
+        final result = data['result'];
+        if (result is Map && result.containsKey('token')) {
+          final token = result['token']?.toString();
+          if (_activeChatController != null &&
+              !_activeChatController!.isClosed &&
+              token != null) {
+            _activeChatController!.add(token);
+          }
+        }
+      } else if (data['function'] == 'loadProgress') {
+        if (kDebugMode) print('RunAnywhere: Load Progress: ${data['result']}');
+      }
+    });
+
+    _isInitialized = true;
+    _initCompleter?.complete();
+    } catch (e) {
+      _initCompleter?.completeError(e);
+      _initCompleter = null;
+      rethrow;
     }
-    
+  }
+
+  StreamController<String>? _activeChatController;
+
+  /// Download model from URL to local path using a Foreground Service.
+  /// Returns the taskId (URL) on success, null on failure.
+  Future<String?> downloadModel(String url, String destinationPath) async {
+    if (!_isInitialized) await initialize();
+
     // Ensure directory exists
     final file = File(destinationPath);
-    final directory = file.parent;
-    if (!await directory.exists()) {
-      await directory.create(recursive: true);
+    if (!await file.parent.exists()) {
+      await file.parent.create(recursive: true);
     }
-    
+
     try {
-      if (kDebugMode) print('RunAnywhere: Starting Workmanager Task: $url -> ${directory.path}');
+      if (kDebugMode) {
+        print('RunAnywhere: Starting Foreground Download: $url');
+      }
 
       final String fileName = file.uri.pathSegments.last;
-      
-      // Dispatch Unique Work
-      await Workmanager().registerOneOffTask(
-        url, // Unique Name (using URL as ID)
-        'download_model_task',
-        inputData: {
-          'url': url,
-          'savePath': destinationPath,
-          'fileName': fileName,
-          'notificationId': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        },
-        constraints: Constraints(
-          networkType: NetworkType.connected,
-          requiresBatteryNotLow: false,
-          requiresCharging: false,
-          requiresDeviceIdle: false,
-          requiresStorageNotLow: true,
-        ),
-        existingWorkPolicy: ExistingWorkPolicy.replace,
-        backoffPolicy: BackoffPolicy.linear,
-        backoffPolicyDelay: Duration(seconds: 10),
+
+      // FIX #3: Removed canDrawOverlays check — it opens a system settings
+      // screen and blocks the download. SYSTEM_ALERT_WINDOW is NOT needed
+      // for a foreground download service.
+
+      // Request battery optimization exemption so Android doesn't kill us
+      if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
+        await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+      }
+
+      // Stop any existing service before starting a new download
+      if (await FlutterForegroundTask.isRunningService) {
+        await FlutterForegroundTask.stopService();
+        await Future.delayed(const Duration(milliseconds: 300));
+      }
+
+      await FlutterForegroundTask.startService(
+        serviceTypes: [ForegroundServiceTypes.dataSync], // Android 14 fix
+        notificationTitle: 'Preparing Download',
+        notificationText: fileName,
+        callback: startCallback,
       );
-      
-      // We return the URL as the taskId for tracking
+
+      // Send download parameters to the service handler
+      FlutterForegroundTask.sendDataToTask({
+        'url': url,
+        'savePath': destinationPath,
+        'fileName': fileName,
+      });
+
       return url;
-      
     } catch (e) {
       print('RunAnywhere: Download Dispatch Failed: $e');
       return null;
@@ -112,75 +187,23 @@ class RunAnywhere {
 
   /// Cancel a specific download task
   Future<void> cancelDownload(String taskId) async {
-    await Workmanager().cancelByUniqueName(taskId);
-  }
-
-  StreamController<String>? _activeChatController;
-  StreamSubscription? _tokenSubscription;
-
-  /// Initialize the engine
-  Future<void> initialize() async {
-    if (_isInitialized) return;
-    
-    if (kDebugMode) {
-      print('RunAnywhere: Initializing...');
-    }
-    
-    // Register background isolate communication
-    IsolateNameServer.removePortNameMapping('downloader_send_port');
-    IsolateNameServer.registerPortWithName(_port.sendPort, 'downloader_send_port');
-    
-    _port.listen((dynamic data) {
-       String id = data[0];
-       int status = data[1];
-       int progress = data[2];
-       _downloadStreamController.add(DownloadUpdate(id, DownloadTaskStatus.fromInt(status), progress));
-    });
-
-    // Workmanager is initialized in main.dart
-
-    // Initialize Token Listener Globally
-    _tokenSubscription = Fllama.instance()?.onTokenStream?.listen((data) {
-        if (kDebugMode) print('RunAnywhere: Stream Data: $data');
-
-        if (data is! Map) return;
-
-        if (data['function'] == 'completion') {
-           final result = data['result'];
-           if (result is Map && result.containsKey('token')) {
-              final token = result['token']?.toString();
-               // Dispatch to active controller if it exists
-              if (_activeChatController != null && !_activeChatController!.isClosed) {
-                  if (token != null) {
-                       // if (kDebugMode) print('Token received: "$token"'); 
-                      _activeChatController!.add(token);
-                  }
-              }
-           }
-        } else if (data['function'] == 'loadProgress') {
-           if (kDebugMode) print('RunAnywhere: Load Progress: ${data['result']}');
-        }
-    });
-
-    _isInitialized = true;
+    await FlutterForegroundTask.stopService();
   }
 
   /// Get existing task ID for a URL
   Future<String?> getTaskIdForUrl(String url) async {
-    // With Workmanager, we use the URL as the Unique Name/ID
-    // So we just return the URL itself if we want to check it.
-    // In a real implementation, we might check Workmanager().getWorkInfosByUniqueName(url)
-    // but that is async and complex. For now, assuming if requested, it's the ID.
-    return url; 
+    // Return null by default. The background service will announce itself
+    // to the UI via the stream when it starts sending progress.
+    return null;
   }
 
   /// Load a model from the given path
   Future<void> loadModel(String modelPath) async {
     if (!_isInitialized) await initialize();
-    
+
     if (_currentModelPath == modelPath && _contextId != null) {
       if (kDebugMode) print('RunAnywhere: Model already loaded: $modelPath');
-      return; // Already loaded
+      return;
     }
 
     if (_contextId != null) {
@@ -192,7 +215,6 @@ class RunAnywhere {
     if (kDebugMode) print('RunAnywhere: Loading model from $modelPath');
 
     try {
-      // Check if file exists
       final file = File(modelPath);
       if (!await file.exists()) {
         throw Exception('Model file not found at $modelPath');
@@ -200,9 +222,9 @@ class RunAnywhere {
 
       final result = await Fllama.instance()?.initContext(
         modelPath,
-        emitLoadProgress: true, // Useful for debugging
+        emitLoadProgress: true,
       );
-      
+
       if (result != null && result.containsKey('contextId')) {
         final id = result['contextId'];
         if (id is double) {
@@ -210,18 +232,21 @@ class RunAnywhere {
         } else if (id is int) {
           _contextId = id.toDouble();
         } else {
-           // Fallback parsing just in case
-           _contextId = double.tryParse(id.toString());
+          _contextId = double.tryParse(id.toString());
         }
-        
+
         if (_contextId != null) {
-            _currentModelPath = modelPath;
-            if (kDebugMode) print('RunAnywhere: Model loaded successfully. ID: $_contextId');
+          _currentModelPath = modelPath;
+          if (kDebugMode) {
+            print('RunAnywhere: Model loaded. ID: $_contextId');
+          }
         } else {
-             throw Exception('Failed to parse contextId from $id');
+          throw Exception('Failed to parse contextId from $id');
         }
       } else {
-        throw Exception('Failed to load model context: Result was null or missing contextId');
+        throw Exception(
+          'Failed to load model context: Result was null or missing contextId',
+        );
       }
     } catch (e) {
       print('RunAnywhere: Load Model Failed: $e');
@@ -238,13 +263,11 @@ class RunAnywhere {
     if (!_isInitialized) throw Exception('RunAnywhere not initialized');
     if (_contextId == null) throw Exception('No model loaded');
 
-    // If there is an active chat, close it? Or throw?
-    // For now, we'll just overwrite it, but ideally we should only allow one at a time.
     if (_activeChatController != null && !_activeChatController!.isClosed) {
-       _activeChatController!.close();
+      _activeChatController!.close();
     }
 
-    // Default to ChatML format
+    // ChatML format
     final StringBuffer promptBuffer = StringBuffer();
     if (systemPrompt != null && systemPrompt.isNotEmpty) {
       promptBuffer.write('<|im_start|>system\n$systemPrompt\n<|im_end|>\n');
@@ -252,27 +275,27 @@ class RunAnywhere {
     promptBuffer.write('<|im_start|>user\n$prompt\n<|im_end|>\n');
     promptBuffer.write('<|im_start|>assistant\n');
     final fullPrompt = promptBuffer.toString();
-    
+
     if (kDebugMode) print('RunAnywhere: Sending Prompt: $fullPrompt');
 
-    // Create a controller to stream tokens as they arrive
     _activeChatController = StreamController<String>();
     final controller = _activeChatController!;
 
-    // Start inference asynchronously
     _runInference(controller, fullPrompt, maxTokens);
-    
+
     return controller.stream;
   }
 
-  Future<void> _runInference(StreamController<String> controller, String fullPrompt, int maxTokens) async {
+  Future<void> _runInference(
+    StreamController<String> controller,
+    String fullPrompt,
+    int maxTokens,
+  ) async {
     try {
-      // NOTE: Listener is already active in initialize()
-
       await Fllama.instance()?.completion(
         _contextId!,
         prompt: fullPrompt,
-        stop: ["<|im_end|>", "<|im_start|>", "User:", "System:"],
+        stop: ['<|im_end|>', '<|im_start|>', 'User:', 'System:'],
         temperature: 0.7,
         topP: 0.9,
         nPredict: maxTokens,
@@ -281,11 +304,10 @@ class RunAnywhere {
     } catch (e) {
       print('Error during inference: $e');
       if (!controller.isClosed) {
-        controller.add(" [Error: $e]");
+        controller.add(' [Error: $e]');
       }
     } finally {
       if (kDebugMode) print('\nRunAnywhere: Generation Complete');
-      // Do NOT cancel the global subscription
       if (!controller.isClosed) {
         await controller.close();
       }
@@ -302,11 +324,10 @@ class RunAnywhere {
   }
 
   void dispose() {
-    _tokenSubscription?.cancel();
     if (_contextId != null) {
-        Fllama.instance()?.releaseContext(_contextId!);
-        _contextId = null;
+      Fllama.instance()?.releaseContext(_contextId!);
+      _contextId = null;
     }
+    _downloadStreamController.close();
   }
 }
-

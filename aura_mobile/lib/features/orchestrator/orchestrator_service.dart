@@ -1,73 +1,165 @@
+import 'package:flutter/foundation.dart';
+import 'package:aura_mobile/core/services/app_control_service.dart';
 import 'package:aura_mobile/core/providers/ai_providers.dart';
-import 'package:aura_mobile/features/agents/application/search_agent.dart';
+import 'package:aura_mobile/core/services/web_service.dart';
+import 'package:aura_mobile/domain/services/scraper_service.dart';
 import 'package:aura_mobile/data/datasources/llm_service.dart';
 import 'package:aura_mobile/domain/services/context_builder_service.dart';
-import 'package:aura_mobile/domain/services/document_service.dart';
 import 'package:aura_mobile/domain/services/intent_detection_service.dart';
 import 'package:aura_mobile/domain/services/memory_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 final orchestratorServiceProvider = Provider((ref) => OrchestratorService(
-  ref.read(intentDetectionServiceProvider),
-  ref.read(memoryServiceProvider),
-  ref.read(documentServiceProvider),
-  ref.read(contextBuilderServiceProvider),
-  ref.read(llmServiceProvider),
-  ref.read(searchAgentProvider),
+  ref.watch(intentDetectionServiceProvider),
+  ref.watch(memoryServiceProvider),
+  ref.watch(contextBuilderServiceProvider),
+  ref.watch(llmServiceProvider),
+  ref.watch(webServiceProvider),
+  ref.watch(scraperServiceProvider),
+  ref.watch(appControlServiceProvider),
 ));
 
 class OrchestratorService {
   final IntentDetectionService _intentService;
   final MemoryService _memoryService;
-  final DocumentService _documentService;
   final ContextBuilderService _contextBuilder;
   final LLMService _llmService;
-  final SearchAgent _searchAgent;
+  final WebService _webService;
+  final ScraperService _scraperService;
+  final AppControlService _appControlService;
 
   OrchestratorService(
     this._intentService,
     this._memoryService,
-    this._documentService,
     this._contextBuilder,
     this._llmService,
-    this._searchAgent,
+    this._webService,
+    this._scraperService,
+    this._appControlService,
   );
 
   Stream<String> processMessage({
     required String message,
     required List<String> chatHistory,
-    bool hasDocuments = false, // passed from UI state
+    bool hasDocuments = false,
   }) async* {
     // 1. Intent Detection
     final intent = await _intentService.detectIntent(message, hasDocuments: hasDocuments);
+    debugPrint("ORCHESTRATOR: Detected intent -> $intent");
 
     // 2. Routing
     switch (intent) {
-      case IntentType.storeMemory:
+      case IntentType.memoryStore:
         await _handleStoreMemory(message);
-        yield "Memory saved.";
+        yield "Memory saved in your local vault.";
         break;
 
-      case IntentType.retrieveMemory:
-        yield* _handleLLMFlow(message, chatHistory, includeMemories: true, includeDocuments: false);
-        break;
-
-      case IntentType.queryDocument:
-        yield* _handleLLMFlow(message, chatHistory, includeMemories: false, includeDocuments: true);
+      case IntentType.memoryRetrieve:
+        yield* _handleMemoryRetrieve(message);
         break;
 
       case IntentType.webSearch:
-        print("ORCHESTRATOR: Routing to SearchAgent");
-        // Strip prefix if present
-        final query = message.replaceFirst("[SEARCH]", "").trim();
-        yield* _searchAgent.process(query);
+        yield* _handleWebSearch(message);
+        break;
+
+      case IntentType.urlScrape:
+        yield* _handleUrlScrape(message);
+        break;
+
+      case IntentType.openApp:
+        final appName = _intentService.extractAppName(message);
+        yield "🚀 **Opening $appName...**";
+        await _appControlService.openApp(appName);
+        break;
+
+      case IntentType.closeApp:
+        // Note: Android restricts closing other apps. This is a best-effort.
+        final appName = _intentService.extractAppName(message);
+        yield "⚠️ **Closing apps is restricted by Android security.**";
+        await _appControlService.closeApp(appName);
+        break;
+
+      case IntentType.openSettings:
+        final type = _intentService.extractSettingsType(message);
+        yield "⚙️ **Opening ${type == 'general' ? 'Settings' : '$type Settings'}...**";
+        await _appControlService.openSettings(type);
+        break;
+
+      case IntentType.openCamera:
+        yield "📸 **Opening Camera...**";
+        await _appControlService.openCamera();
+        break;
+
+      case IntentType.dialContact:
+        final contact = _intentService.extractContactName(message);
+        yield "📞 **Dialing $contact...**";
+        await _appControlService.dialContact(contact);
+        break;
+
+      case IntentType.sendSMS:
+        final details = _intentService.extractSMSDetails(message);
+        final name = details['name'] ?? '';
+        final body = details['message'] ?? '';
+        
+        if (name.isNotEmpty) {
+           yield "📨 **Opening SMS to $name...**\nMessage: \"$body\"";
+           await _appControlService.sendSMS(name, body);
+        } else {
+           yield "❌ I couldn't understand who to send the message to. Please try 'Send SMS to [Name] saying [Message]'.";
+        }
         break;
 
       case IntentType.normalChat:
-      default:
-        yield* _handleLLMFlow(message, chatHistory, includeMemories: true, includeDocuments: false);
+        yield* _handleLLMFlow(message, chatHistory, includeMemories: true, includeDocuments: hasDocuments);
         break;
     }
+  }
+
+  Stream<String> _handleMemoryRetrieve(String message) async* {
+    final memories = await _memoryService.retrieveRelevantMemories(message);
+    final prompt = _contextBuilder.injectMemory(memories, message);
+    yield* _llmService.chat(prompt);
+  }
+
+  Stream<String> _handleWebSearch(String message) async* {
+    final cleanQuery = _intentService.extractSearchQuery(message);
+    yield "🔍 **Searching the web for: '$cleanQuery'**...\n\n";
+    debugPrint("ORCHESTRATOR: Searching for '$cleanQuery'");
+    
+    final results = await _webService.search(cleanQuery);
+    if (results.isEmpty) {
+      yield "I couldn't find any recent information for '$cleanQuery'.";
+      return;
+    }
+
+    final prompt = _contextBuilder.injectWeb(results, cleanQuery);
+    
+    // 1. Stream the synthesized answer from AI with FORCING system prompt
+    yield* _llmService.chat(
+      prompt, 
+      systemPrompt: "You have web access. Use the Search Results provided below to answer the user directly. Do not apologize or refuse."
+    );
+
+    // 2. Append top 5 sources at the end
+    yield "\n\n🌐 **Top Sources:**\n";
+    final topResults = results.take(5).toList();
+    for (var i = 0; i < topResults.length; i++) {
+      final res = topResults[i];
+      yield "${i + 1}. [${res.title}](${res.url})\n";
+    }
+  }
+
+  Stream<String> _handleUrlScrape(String message) async* {
+    final url = _intentService.extractUrl(message);
+    yield "🌐 **Reading content from: '$url'**...\n\n";
+    debugPrint("ORCHESTRATOR: Scraping URL '$url'");
+    
+    final content = await _scraperService.scrape(url);
+    final prompt = _contextBuilder.injectURL(content, message);
+    yield* _llmService.chat(
+      prompt,
+      systemPrompt: "You are analyzing a specific webpage. Summarize the content provided in the context to answer the user. Do NOT refuse or say you cannot access the web, as the content has already been provided to you."
+    );
   }
 
   Future<void> _handleStoreMemory(String message) async {
@@ -81,16 +173,12 @@ class OrchestratorService {
     required bool includeMemories,
     required bool includeDocuments,
   }) async* {
-    // 3. Context Building
     final prompt = await _contextBuilder.buildPrompt(
       userMessage: message,
       chatHistory: history,
       includeMemories: includeMemories,
       includeDocuments: includeDocuments,
     );
-
-    // 4. LLM Execution
-    // We pass the full prompt. System prompt is embedded in it.
     yield* _llmService.chat(prompt);
   }
 }

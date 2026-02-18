@@ -6,11 +6,14 @@ import 'package:workmanager/workmanager.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:dio/dio.dart';
 import 'package:aura_mobile/core/services/daily_summary_scheduler.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:intl/intl.dart'; // Ensure intl is available or use DateTime.now().toString()
 
 @pragma('vm:entry-point')
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     print("Native: Background Task Started: $task");
+    await _logToFile("Native: Background Task Started: $task");
     
     if (task == 'dailySummaryTask') {
       await checkAndScheduleDailySummary();
@@ -32,7 +35,11 @@ void callbackDispatcher() {
           InitializationSettings(android: initializationSettingsAndroid);
       await flutterLocalNotificationsPlugin.initialize(initializationSettings);
 
-      final dio = Dio();
+      final dio = Dio(BaseOptions(
+        connectTimeout: Duration(minutes: 1),
+        receiveTimeout: Duration(minutes: 60), // Allow long downloads
+        sendTimeout: Duration(minutes: 1),
+      ));
       
       try {
         // Create the notification channel (critical for Android 8+)
@@ -56,6 +63,7 @@ void callbackDispatcher() {
                
                if (progress % 5 == 0) { // Update every 5%
                  _showProgressNotification(flutterLocalNotificationsPlugin, notificationId, fileName, progress, false);
+                 _logToFile("Download Progress: $progress% for $fileName");
                  
                  // Try to communicate back to main isolate if app is open
                  final SendPort? send = IsolateNameServer.lookupPortByName('downloader_send_port');
@@ -67,6 +75,7 @@ void callbackDispatcher() {
         );
 
         // Success
+        await _logToFile("Download Success: $fileName");
         _showProgressNotification(flutterLocalNotificationsPlugin, notificationId, fileName, 100, true);
         final SendPort? send = IsolateNameServer.lookupPortByName('downloader_send_port');
         send?.send([url, 3, 100]); // 3 = Complete
@@ -75,6 +84,7 @@ void callbackDispatcher() {
 
       } catch (e) {
         print("Native: Download Failed: $e");
+        await _logToFile("Native: Download Failed: $e");
         _showProgressNotification(flutterLocalNotificationsPlugin, notificationId, "Download Failed", 0, false, isError: true);
         final SendPort? send = IsolateNameServer.lookupPortByName('downloader_send_port');
         send?.send([url, 4, 0]); // 4 = Failed
@@ -116,5 +126,16 @@ Future<void> _showProgressNotification(
         autoCancel: false,
       ),
     ),
-  );
+);
+}
+
+Future<void> _logToFile(String message) async {
+  try {
+    final directory = await getApplicationDocumentsDirectory();
+    final file = File('${directory.path}/background_download.log');
+    final timestamp = DateTime.now().toIso8601String();
+    await file.writeAsString('$timestamp: $message\n', mode: FileMode.append);
+  } catch (e) {
+    print("Failed to write log: $e");
+  }
 }

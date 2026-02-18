@@ -41,6 +41,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // Scroll to bottom when new messages arrive
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
+    // 1. Update text field in real-time as user speaks
+    ref.listen(chatProvider.select((s) => s.partialVoiceText), (prev, next) {
+      if (next.isNotEmpty) {
+        _controller.text = next;
+        _controller.selection = TextSelection.fromPosition(
+          TextPosition(offset: _controller.text.length),
+        );
+      }
+    });
+
+    // 2. Clear text field explicitly when listening stops
+    ref.listen(chatProvider.select((s) => s.isListening), (prev, next) {
+      if (prev == true && next == false) {
+        _controller.clear();
+      }
+    });
+    final modelState = ref.watch(modelSelectorProvider);
+    final isModelLoading = chatState.isModelLoading || modelState.activeModelId == null;
+
     return Scaffold(
       backgroundColor: const Color(0xFF0a0a0c), // Obsidian
       drawer: const AppDrawer(), // Sidebar Implementation
@@ -49,8 +68,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         title: Consumer(
           builder: (context, ref, child) {
             final modelState = ref.watch(modelSelectorProvider);
-            // Handle loading/initial state
-            if (modelState.activeModelId == null) {
+            final chatState = ref.watch(chatProvider);
+            
+            // Unified loading/readiness state
+            final isAppInitializing = modelState.activeModelId == null || chatState.isModelLoading;
+
+            if (isAppInitializing) {
                  return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     decoration: BoxDecoration(
@@ -336,9 +359,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         Expanded(
                           child: TextField(
                             controller: _controller,
+                            enabled: !isModelLoading,
                             style: GoogleFonts.outfit(color: Colors.white),
                             decoration: InputDecoration(
-                              hintText: _isWebSearchMode ? 'Search the web...' : 'Ask Aura...',
+                              hintText: isModelLoading 
+                                  ? 'Model loading...' 
+                                  : (_isWebSearchMode ? 'Search the web...' : 'Ask Aura...'),
                               hintStyle: GoogleFonts.outfit(color: Colors.white30),
                               border: InputBorder.none,
                               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
@@ -355,8 +381,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           ),
                         ),
                         IconButton(
-                          icon: Icon(chatState.isListening ? Icons.mic_off : Icons.mic, color: Colors.white54),
-                          onPressed: () {
+                          icon: Icon(
+                            chatState.isListening ? Icons.mic_off : Icons.mic, 
+                            color: chatState.isModelLoading ? Colors.white10 : Colors.white54
+                          ),
+                          onPressed: isModelLoading ? null : () {
                             if (chatState.isListening) {
                               ref.read(chatProvider.notifier).stopListening();
                             } else {
@@ -370,19 +399,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 ),
                 const SizedBox(width: 12),
                 GestureDetector(
-                  onTap: () => _sendMessage(_controller.text),
+                  onTap: isModelLoading ? null : () => _sendMessage(_controller.text),
                   child: Container(
                     width: 50,
                     height: 50,
-                    decoration: const BoxDecoration(
+                    decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       gradient: LinearGradient(
-                        colors: [Color(0xFFe6cf8e), Color(0xFFc69c3a)],
+                        colors: isModelLoading 
+                            ? [const Color(0xFF2a2a30), const Color(0xFF1a1a20)]
+                            : [const Color(0xFFe6cf8e), const Color(0xFFc69c3a)],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       ),
                     ),
-                    child: const Icon(Icons.arrow_upward, color: Colors.black),
+                    child: Icon(
+                      Icons.arrow_upward, 
+                      color: isModelLoading ? Colors.white10 : Colors.black
+                    ),
                   ),
                 ),
               ],

@@ -8,9 +8,12 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.aura.ai/memory"
+    private val APP_CONTROL_CHANNEL = "com.aura.ai/app_control"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        
+        // Memory Channel
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             if (call.method == "getAvailableMemory") {
                 val availMem = getAvailableMemory()
@@ -22,8 +25,218 @@ class MainActivity: FlutterActivity() {
                 result.notImplemented()
             }
         }
+
+        // App Control Channel
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, APP_CONTROL_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "openApp" -> {
+                    val appName = call.argument<String>("appName")
+                    if (appName != null) {
+                        launchApp(appName, result)
+                    } else {
+                        result.error("INVALID_ARGUMENT", "App name is required", null)
+                    }
+                }
+                "closeApp" -> {
+                    // Android doesn't support force closing apps easily without root/accessibility
+                    // We can just try to go to home screen or ignore for now to avoid crashes
+                    result.success("Closing apps programmatically is restricted on Android.")
+                }
+                "openSettings" -> {
+                    val type = call.argument<String>("type")
+                    openSettings(type, result)
+                }
+                "openCamera" -> {
+                    openCamera(result)
+                }
+                "dialContact" -> {
+                    val name = call.argument<String>("name")
+                    dialContact(name, result)
+                }
+                "sendSMS" -> {
+                    val name = call.argument<String>("name")
+                    val message = call.argument<String>("message")
+                    sendSMS(name, message, result)
+                }
+                else -> result.notImplemented()
+            }
+        }
     }
 
+    private fun launchApp(appName: String, result: MethodChannel.Result) {
+        val pm = packageManager
+        val packages = pm.getInstalledPackages(0)
+        
+        // Simple fuzzy match algorithm
+        var bestMatchPkg: String? = null
+        var bestMatchLabel: String? = null
+        val query = appName.lowercase()
+
+        for (pkg in packages) {
+            val appInfo = pkg.applicationInfo
+            if (appInfo == null) continue
+
+            val label = pm.getApplicationLabel(appInfo).toString()
+            if (label.lowercase() == query) {
+                bestMatchPkg = pkg.packageName
+                bestMatchLabel = label
+                break // Exact match found
+            }
+            if (label.lowercase().contains(query)) {
+                // Keep the first partial match or improve logic
+                if (bestMatchPkg == null) {
+                   bestMatchPkg = pkg.packageName
+                   bestMatchLabel = label
+                }
+            }
+        }
+
+        if (bestMatchPkg != null) {
+            try {
+                val launchIntent = pm.getLaunchIntentForPackage(bestMatchPkg)
+                if (launchIntent != null) {
+                    startActivity(launchIntent)
+                    result.success("Launched $bestMatchLabel")
+                } else {
+                    result.error("LAUNCH_FAILED", "Could not create intent for $bestMatchPkg", null)
+                }
+            } catch (e: Exception) {
+                 result.error("ERROR", e.message, null)
+            }
+        } else {
+            result.error("APP_NOT_FOUND", "Could not find app '$appName'", null)
+        }
+    }
+
+    private fun openSettings(type: String?, result: MethodChannel.Result) {
+        try {
+            val intent = when (type) {
+                "wifi" -> android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)
+                "bluetooth" -> android.content.Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)
+                else -> android.content.Intent(android.provider.Settings.ACTION_SETTINGS)
+            }
+            startActivity(intent)
+            result.success("Settings opened")
+        } catch (e: Exception) {
+            result.error("ERROR", e.message, null)
+        }
+    }
+
+    private fun openCamera(result: MethodChannel.Result) {
+         try {
+            val intent = android.content.Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE)
+            startActivity(intent)
+            result.success("Camera opened")
+        } catch (e: Exception) {
+            result.error("ERROR", e.message, null)
+        }
+    }
+
+    private fun dialContact(name: String?, result: MethodChannel.Result) {
+        // For simplicity in this step, we will just open the dialer with the name/number parsing handled by OS if it is a number
+        // Or if it is a name, we might search. Implementing searching Contacts requires READ_CONTACTS.
+        // Let's assume input might be a name or number.
+        // We will try to filter by name first if permission acts up, but basic intent is DIAL.
+        
+        // If it's a number, easy. If name, we need to query.
+        if (name == null) {
+             result.error("INVALID", "Name required", null)
+             return
+        }
+
+        // Check if it looks like a number
+        if (name.all { it.isDigit() || it == '+' || it == ' ' || it == '-' }) {
+             val intent = android.content.Intent(android.content.Intent.ACTION_DIAL)
+             intent.data = android.net.Uri.parse("tel:$name")
+             startActivity(intent)
+             result.success("Dialing $name")
+             return
+        }
+
+        // Try to find contact by name
+        // Requires READ_CONTACTS permission handling in MainActivity or assuming helper
+        // Since we are in MainActivity, we can try to query content resolver
+        // But for safety and code brevity in this generated file, let's try to query first.
+        
+        try {
+            val resolver = contentResolver
+            val cursor = resolver.query(
+                android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                null,
+                "${android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
+                arrayOf("%$name%"),
+                null
+            )
+            
+            var number: String? = null
+            if (cursor != null && cursor.moveToFirst()) {
+                val index = cursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER)
+                if (index != -1) number = cursor.getString(index)
+                cursor.close()
+            }
+
+            if (number != null) {
+                 val intent = android.content.Intent(android.content.Intent.ACTION_DIAL)
+                 intent.data = android.net.Uri.parse("tel:$number")
+                 startActivity(intent)
+                 result.success("Dialing $name ($number)")
+            } else {
+                 // Fallback to searching in contacts app
+                 val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
+                 intent.data = android.net.Uri.withAppendedPath(android.provider.ContactsContract.Contacts.CONTENT_FILTER_URI, android.net.Uri.encode(name))
+                 startActivity(intent)
+                 result.success("Searching contact $name")
+            }
+
+        } catch (e: Exception) {
+             // If permission denied or other error, fallback to dialer empty or log
+             // result.error("PERMISSION_ERROR", "Read Contacts Permission needed", null)
+             // Just open dialer
+             val intent = android.content.Intent(android.content.Intent.ACTION_DIAL)
+             startActivity(intent)
+             result.success("Opened Dialer (Contact search failed or permission denied)")
+        }
+    }
+
+    private fun sendSMS(name: String?, message: String?, result: MethodChannel.Result) {
+         if (name == null) {
+             result.error("INVALID", "Name/Number required", null)
+             return
+         }
+         
+         // 1. Resolve number (reuse logic or duplication)
+         var number = name
+         if (!name.all { it.isDigit() || it == '+' || it == ' ' || it == '-' }) {
+             try {
+                val cursor = contentResolver.query(
+                    android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                    null,
+                    "${android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
+                    arrayOf("%$name%"),
+                    null
+                )
+                if (cursor != null && cursor.moveToFirst()) {
+                    val index = cursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER)
+                    if (index != -1) number = cursor.getString(index)
+                    cursor.close()
+                }
+             } catch (e: Exception) {
+                 // Ignore
+             }
+         }
+
+         try {
+             val intent = android.content.Intent(android.content.Intent.ACTION_SENDTO)
+             intent.data = android.net.Uri.parse("smsto:$number")
+             intent.putExtra("sms_body", message ?: "")
+             startActivity(intent)
+             result.success("Opened SMS app for $number")
+         } catch (e: Exception) {
+             result.error("ERROR", e.message, null)
+         }
+    }
+    
+    // Existing helper methods
     private fun getAvailableMemory(): Long {
         val memoryInfo = ActivityManager.MemoryInfo()
         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager

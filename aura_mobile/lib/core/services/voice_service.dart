@@ -18,15 +18,18 @@ class VoiceService {
     );
   }
 
-  Future<void> startListening({required Function(String) onResult}) async {
+  Future<void> startListening({required Function(String, bool) onResult}) async {
     if (!_isListening) {
       bool available = await _speechToText.initialize();
       if (available) {
         _isListening = true;
         _speechToText.listen(
           onResult: (val) {
-            onResult(val.recognizedWords);
+            onResult(val.recognizedWords, val.finalResult);
           },
+          listenMode: ListenMode.dictation,
+          cancelOnError: true,
+          partialResults: true,
         );
       }
     }
