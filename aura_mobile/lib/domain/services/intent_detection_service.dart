@@ -24,13 +24,7 @@ class IntentDetectionService {
     debugPrint("INTENT_DETECTION: Analyzing message: '$message'");
     final lowerMessage = message.trim().toLowerCase();
 
-    // 1️⃣ URL Detection (Highest Priority)
-    if (containsURL(message)) {
-      debugPrint("INTENT_DETECTION: Detected URL -> urlScrape");
-      return IntentType.urlScrape;
-    }
-
-    // 2️⃣ Memory Store
+    // 1️⃣ Memory Store
     if (lowerMessage.startsWith("remember that") ||
         lowerMessage.startsWith("save this") ||
         lowerMessage.startsWith("note that")) {
@@ -38,7 +32,7 @@ class IntentDetectionService {
       return IntentType.memoryStore;
     }
 
-    // 3️⃣ Memory Retrieve
+    // 2️⃣ Memory Retrieve
     if (lowerMessage.contains("what did i say") ||
         lowerMessage.contains("when is my") ||
         lowerMessage.contains("what is my") ||
@@ -48,7 +42,7 @@ class IntentDetectionService {
       return IntentType.memoryRetrieve;
     }
 
-    // 4️⃣ App Control / Device Actions (Priority over Search)
+    // 3️⃣ App Control / Device Actions
     if (lowerMessage.startsWith("open ") || lowerMessage.startsWith("launch ")) {
        if (lowerMessage.contains("settings")) return IntentType.openSettings;
        if (lowerMessage.contains("camera")) return IntentType.openCamera;
@@ -79,7 +73,7 @@ class IntentDetectionService {
       return IntentType.sendSMS;
     }
 
-    // 4️⃣ Web Search (Aggressive Detection)
+    // 4️⃣ Web Search (Explicit Commands & Keywords)
     final searchKeywords = RegExp(r'\b(search|research|lookup|browse|find)\b', caseSensitive: false);
     final contextKeywords = RegExp(r'\b(latest|news|who is|current|weather|whether|gold rate|price of)\b', caseSensitive: false);
 
@@ -88,6 +82,12 @@ class IntentDetectionService {
         contextKeywords.hasMatch(lowerMessage)) {
       debugPrint("INTENT_DETECTION: Detected search keywords -> webSearch");
       return IntentType.webSearch;
+    }
+
+    // 5️⃣ URL Detection (Fallback for direct URL input)
+    if (containsURL(message)) {
+      debugPrint("INTENT_DETECTION: Detected URL -> urlScrape");
+      return IntentType.urlScrape;
     }
 
     // 5️⃣ Default

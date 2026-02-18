@@ -23,6 +23,12 @@ Aura Mobile is a privacy-first, fully offline AI assistant powered by on-device 
 - **Hands-Free Mode**: Talk to Aura and hear responses via Text-to-Speech.
 - **Natural Conversation**: Fluid voice-to-voice interaction pipeline.
 
+### 📱 Assistant Capabilities (New)
+- **App Control**: "Open YouTube", "Launch WhatsApp", "Close Settings".
+- **Device Control**: "Turn on Wi-Fi", "Open Camera", "Dial Mom".
+- **Communication**: "Send SMS to John saying Hello".
+- **Web Search**: "What is the weather in Bangalore?", "Who won the Super Bowl?". Aura searches the web and synthesizes an answer for you.
+
 ### ⚡ SuperGravity Architecture
 - **Orchestrator Pipeline**: Advanced message processing (Intent -> Route -> Context -> LLM).
 - **Rule-Based Intent**: Fast, accurate detection of user needs without wasting LLM resources.
