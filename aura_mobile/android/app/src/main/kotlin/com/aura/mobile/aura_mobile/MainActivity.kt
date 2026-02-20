@@ -2,6 +2,7 @@ package com.aura.mobile.aura_mobile
 
 import android.app.ActivityManager
 import android.content.Context
+import android.telephony.SmsManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -57,6 +58,31 @@ class MainActivity: FlutterActivity() {
                     val name = call.argument<String>("name")
                     val message = call.argument<String>("message")
                     sendSMS(name, message, result)
+                }
+                "sendSMSDirect" -> {
+                    val number = call.argument<String>("number")
+                    val message = call.argument<String>("message")
+                    if (number != null && message != null) {
+                        sendSMSDirect(number, message, result)
+                    } else {
+                        result.error("INVALID", "Number and message required", null)
+                    }
+                }
+                "callPhoneDirect" -> {
+                    val number = call.argument<String>("number")
+                    if (number != null) {
+                        callPhoneDirect(number, result)
+                    } else {
+                        result.error("INVALID", "Number required", null)
+                    }
+                }
+                "toggleTorch" -> {
+                    val state = call.argument<Boolean>("state")
+                    if (state != null) {
+                        toggleTorch(state, result)
+                    } else {
+                        result.error("INVALID", "State required", null)
+                    }
                 }
                 else -> result.notImplemented()
             }
@@ -249,5 +275,55 @@ class MainActivity: FlutterActivity() {
         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         activityManager.getMemoryInfo(memoryInfo)
         return memoryInfo.totalMem
+    }
+
+    private fun sendSMSDirect(number: String, message: String, result: MethodChannel.Result) {
+        try {
+            val smsManager = SmsManager.getDefault()
+            smsManager.sendTextMessage(number, null, message, null, null)
+            result.success("SMS Sent to $number")
+        } catch (e: Exception) {
+            result.error("SMS_FAILED", e.message, null)
+        }
+    }
+
+    private fun callPhoneDirect(number: String, result: MethodChannel.Result) {
+        try {
+            val intent = android.content.Intent(android.content.Intent.ACTION_CALL)
+            intent.data = android.net.Uri.parse("tel:$number")
+            startActivity(intent)
+            result.success("Call initiated to $number")
+        } catch (e: Exception) {
+            result.error("CALL_FAILED", e.message, null)
+        }
+    }
+
+    private fun toggleTorch(state: Boolean, result: MethodChannel.Result) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M) {
+            result.error("UNSUPPORTED", "Torch requires Android M+", null)
+            return
+        }
+        try {
+            val cameraManager = getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+            // Find a camera with flash support
+            var cameraId: String? = null
+            for (id in cameraManager.cameraIdList) {
+                val characteristics = cameraManager.getCameraCharacteristics(id)
+                val hasFlash = characteristics.get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE)
+                if (hasFlash == true) {
+                    cameraId = id
+                    break
+                }
+            }
+            
+            if (cameraId != null) {
+                cameraManager.setTorchMode(cameraId, state)
+                result.success("Torch toggled to $state")
+            } else {
+                result.error("NO_FLASH", "No camera with flash found", null)
+            }
+        } catch (e: Exception) {
+            result.error("TORCH_ERROR", e.message, null)
+        }
     }
 }

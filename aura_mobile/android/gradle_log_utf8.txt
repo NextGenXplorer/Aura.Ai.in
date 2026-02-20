@@ -1,0 +1,15 @@
+﻿> Task :gradle:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :gradle:compileKotlin UP-TO-DATE
+> Task :gradle:compileJava NO-SOURCE
+> Task :gradle:compileGroovy NO-SOURCE
+> Task :gradle:pluginDescriptors UP-TO-DATE
+> Task :gradle:processResources UP-TO-DATE
+> Task :gradle:classes UP-TO-DATE
+> Task :gradle:jar UP-TO-DATE
+> Task :app:ReleaseMinSdkCheck
+
+> Task :app:compileFlutterBuildRelease
+
+> Task :app:compileFlutterBuildRelease FAILED
+Kotlin build report is written to file:///C:/Users/appum/OneDrive/Documents/AURA%20assistant/aura_mobile/build/reports/kotlin-build/android-build-2026-02-19-19-27-38-0.txt
+6 actionable tasks: 2 executed, 4 up-to-date

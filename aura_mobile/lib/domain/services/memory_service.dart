@@ -71,10 +71,24 @@ class MemoryService {
     // 4. Sort and Top K
     scoredMemories.sort((a, b) => b.value.compareTo(a.value)); // Descending
     
-    return scoredMemories
+    var finalResults = scoredMemories
         .take(limit)
         .where((entry) => entry.value > 0.7) // Threshold
         .map((entry) => entry.key.content)
         .toList();
+
+    // 5. Fallback to Keyword Search if Vector Search fails (returns empty)
+    // This handles the case where embeddings are 0.0 or the model isn't loading them correctly.
+    if (finalResults.isEmpty) {
+      final keywordResults = await _repository.searchMemories(query);
+      if (keywordResults.isNotEmpty) {
+        finalResults = keywordResults
+            .take(limit)
+            .map((m) => m.content)
+            .toList();
+      }
+    }
+
+    return finalResults;
   }
 }

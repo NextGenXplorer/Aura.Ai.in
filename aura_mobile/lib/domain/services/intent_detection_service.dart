@@ -12,7 +12,8 @@ enum IntentType {
   openSettings,
   openCamera,
   dialContact,
-  sendSMS
+  sendSMS,
+  torchControl
 }
 
 final intentDetectionServiceProvider = Provider((ref) => IntentDetectionService());
@@ -24,61 +25,133 @@ class IntentDetectionService {
     debugPrint("INTENT_DETECTION: Analyzing message: '$message'");
     final lowerMessage = message.trim().toLowerCase();
 
+    // 0️⃣ Torch / Flashlight (High Priority)
+    final torchRegex = RegExp(
+      r'\b(torch|flashlight|flash|light)\b',
+      caseSensitive: false,
+    );
+    if (torchRegex.hasMatch(lowerMessage)) {
+       // Check for clear toggle commands or just the noun
+       if (lowerMessage.contains("on") || 
+           lowerMessage.contains("off") || 
+           lowerMessage.contains("enable") || 
+           lowerMessage.contains("disable") || 
+           lowerMessage.startsWith("torch") || 
+           lowerMessage.startsWith("flashlight")) {
+           return IntentType.torchControl;
+       }
+    }
+
     // 1️⃣ Memory Store
-    if (lowerMessage.startsWith("remember that") ||
-        lowerMessage.startsWith("save this") ||
-        lowerMessage.startsWith("note that")) {
+    // Matches: "remember ...", "don't forget ...", "keep in mind ...", "save this", "remind me"
+    final memoryStoreRegex = RegExp(
+      r'^(remember|don\x27t\s+forget|keep\s+in\s+mind|memorize|save\s+this|store\s+this|note\s+that|remind\s+me)\b',
+      caseSensitive: false,
+    );
+
+    if (memoryStoreRegex.hasMatch(lowerMessage)) {
       debugPrint("INTENT_DETECTION: Detected Memory Store trigger -> memoryStore");
       return IntentType.memoryStore;
     }
 
     // 2️⃣ Memory Retrieve
-    if (lowerMessage.contains("what did i say") ||
-        lowerMessage.contains("when is my") ||
-        lowerMessage.contains("what is my") ||
+    // Matches: "recall ...", "what was ...", "remind me ...", "bring up ..."
+    final memoryRetrieveRegex = RegExp(
+      r'^(recall|remember|remind\s+me|what\s+(was|did|is)|when\s+(was|is)|where\s+(was|is|did)|bring\s+up|search\s+memory|find\s+in\s+memory)\b',
+      caseSensitive: false,
+    );
+
+    if (memoryRetrieveRegex.hasMatch(lowerMessage) || 
         lowerMessage.contains("do you remember") ||
-        lowerMessage.contains("recall")) {
+        lowerMessage.contains("my memory")) {
       debugPrint("INTENT_DETECTION: Detected Memory Retrieval keywords -> memoryRetrieve");
       return IntentType.memoryRetrieve;
     }
 
     // 3️⃣ App Control / Device Actions
-    if (lowerMessage.startsWith("open ") || lowerMessage.startsWith("launch ")) {
+    
+    // Open/Launch
+    final openAppRegex = RegExp(
+      r'^(open|launch|start|run|go\s+to|switch\s+to)\s+(.+)',
+      caseSensitive: false,
+    );
+    
+    // Close/Kill
+    final closeAppRegex = RegExp(
+      r'^(close|kill|stop|exit|quit|shut\s+down)\s+(.+)',
+      caseSensitive: false,
+    );
+
+    if (openAppRegex.hasMatch(lowerMessage)) {
        if (lowerMessage.contains("settings")) return IntentType.openSettings;
        if (lowerMessage.contains("camera")) return IntentType.openCamera;
        return IntentType.openApp;
     }
 
-    if (lowerMessage.startsWith("close ") || lowerMessage.startsWith("kill ")) {
+    if (closeAppRegex.hasMatch(lowerMessage)) {
       return IntentType.closeApp;
     }
 
-    if (lowerMessage.contains("open settings") || 
-        lowerMessage.contains("wifi settings") || 
-        lowerMessage.contains("bluetooth settings")) {
+    // Settings
+    final settingsRegex = RegExp(
+      r'\b(settings|configuration|preferences|config)\b',
+      caseSensitive: false,
+    );
+    
+    if (settingsRegex.hasMatch(lowerMessage) && 
+       (lowerMessage.contains("open") || lowerMessage.contains("show") || lowerMessage.contains("manage") || lowerMessage.contains("change") || lowerMessage.contains("wifi") || lowerMessage.contains("bluetooth"))) {
       return IntentType.openSettings;
     }
 
-    if (lowerMessage.contains("open camera") || lowerMessage.contains("take a photo")) {
+    // Camera
+    final cameraRegex = RegExp(
+      r'\b(camera|photo|picture|selfie|video)\b',
+      caseSensitive: false,
+    );
+    
+    if (cameraRegex.hasMatch(lowerMessage) && 
+       (lowerMessage.contains("open") || lowerMessage.contains("start") || lowerMessage.contains("take") || lowerMessage.contains("capture") || lowerMessage.contains("snap"))) {
       return IntentType.openCamera;
     }
 
-    if (lowerMessage.startsWith("call ") || lowerMessage.startsWith("dial ")) {
+    // Calls
+    final callRegex = RegExp(
+      r'^(call|dial|phone|ring|contact)\s+(.+)',
+      caseSensitive: false,
+    );
+    if (callRegex.hasMatch(lowerMessage)) {
       return IntentType.dialContact;
     }
 
-    if (lowerMessage.startsWith("send sms") || 
-        lowerMessage.startsWith("text ") || 
-        lowerMessage.startsWith("message ")) {
-      return IntentType.sendSMS;
+    // SMS
+    final smsRegex = RegExp(
+      r'^(send|write|shoot|text|message|msg)\s+.*(sms|text|message|msg)?',
+      caseSensitive: false,
+    );
+    if (smsRegex.hasMatch(lowerMessage) && !lowerMessage.startsWith("remember") && !lowerMessage.startsWith("save")) {
+       // Avoid conflict with memory store "save this message"
+       // But wait, "message" is generic. Ideally we check if it looks like a person's name or structure.
+       // Let's rely on the extraction logic to fail gracefully if it matches nothing,
+       // or be more specific: "text [Name]"
+       if (lowerMessage.startsWith("text") || 
+           lowerMessage.startsWith("message") || 
+           lowerMessage.contains(" sms ") || 
+           lowerMessage.endsWith(" sms")) {
+          return IntentType.sendSMS;
+       }
     }
 
     // 4️⃣ Web Search (Explicit Commands & Keywords)
-    final searchKeywords = RegExp(r'\b(search|research|lookup|browse|find)\b', caseSensitive: false);
-    final contextKeywords = RegExp(r'\b(latest|news|who is|current|weather|whether|gold rate|price of)\b', caseSensitive: false);
+    // Expanded keywords: google, how to, who is, what is, define, explain...
+    final searchPrefixRegex = RegExp(
+      r'^(search\s+for|search|find|lookup|look\s+up|google|browse|research|who\s+(is|was)|what\s+(is|was|are|were)|how\s+(to|do|can)|define|explain|tell\s+me\s+about)\s+(.+)',
+      caseSensitive: false,
+    );
+    
+    final contextKeywords = RegExp(r'\b(latest|news|weather|forecast|price\s+of|rate|stock|score)\b', caseSensitive: false);
 
-    if (lowerMessage.startsWith("[search]") ||
-        searchKeywords.hasMatch(lowerMessage) ||
+    if (searchPrefixRegex.hasMatch(lowerMessage) ||
+        lowerMessage.startsWith("[search]") ||
         contextKeywords.hasMatch(lowerMessage)) {
       debugPrint("INTENT_DETECTION: Detected search keywords -> webSearch");
       return IntentType.webSearch;
@@ -103,19 +176,21 @@ class IntentDetectionService {
     return urlRegex.hasMatch(text);
   }
 
+
   /// Extracts the clean search query by stripping command words.
   String extractSearchQuery(String message) {
     String clean = message.trim();
-    final lower = clean.toLowerCase();
+    // Regex to match the command prefix
+    final commandRegex = RegExp(
+      r'^(search\s+(for\s+)?|find\s+|lookup\s+|look\s+up\s+|google\s+|browse\s+|research\s+|who\s+(is|was)\s+|what\s+(is|was|are|were)\s+|how\s+(to|do|can)\s+|define\s+|explain\s+|tell\s+me\s+about\s+|\[search\]\s*)',
+      caseSensitive: false,
+    );
     
-    final commands = ["[search]", "search", "research", "lookup", "browse", "find"];
-    for (final cmd in commands) {
-      if (lower.startsWith(cmd)) {
-        clean = clean.substring(cmd.length).trim();
-        break;
-      }
+    final match = commandRegex.firstMatch(clean);
+    if (match != null) {
+      return clean.substring(match.end).trim();
     }
-    return clean.isEmpty ? message : clean;
+    return clean;
   }
 
   /// Extracts the URL from a message, potentially stripping "search" or "analyze"
@@ -130,27 +205,34 @@ class IntentDetectionService {
 
   /// Extracts the content to be saved from a memory command.
   String extractMemoryContent(String message) {
-    final lowerMessage = message.toLowerCase();
-    if (lowerMessage.startsWith("remember that")) {
-      return message.substring("remember that".length).trim();
-    }
-    if (lowerMessage.startsWith("save this")) {
-      return message.substring("save this".length).trim();
-    }
-    if (lowerMessage.startsWith("note that")) {
-      return message.substring("note that".length).trim();
-    }
-    return message;
+    // Regex matching the prefix commands to strip them
+    final memoryCommandRegex = RegExp(
+      r'^(remember\s*(that|to)?|don\x27t\s+forget\s*(to)?|keep\s+in\s+mind\s*(that)?|memorize\s*(that)?|save\s+this|store\s+this|note\s+that|remind\s+me\s*(to|that)?)\s*',
+      caseSensitive: false,
+    );
+    
+    // Replace the matched prefix with empty string to get the content
+    final content = message.replaceFirst(memoryCommandRegex, '').trim();
+    
+    // If for some reason the replace didn't work (shouldn't happen if detectIntent passed), return original
+    if (content.isEmpty) return message;
+    
+    // If the content starts with "that" or "to" redundantly after stripping (edge cases), strip it again if it makes sense
+    // e.g. "remember that my key is 123" -> regex might strip "remember" leaving "that my key..." if not careful.
+    // The regex above includes (that)? capture groups to handle this, so it should be fine.
+    
+    return content;
   }
   String extractAppName(String message) {
-    String clean = message.trim();
-    final lower = clean.toLowerCase();
+    final clean = message.trim();
+    final commandRegex = RegExp(
+      r'^(open|launch|start|run|go\s+to|switch\s+to|close|kill|stop|exit|quit|shut\s+down)\s+',
+      caseSensitive: false,
+    );
     
-    final commands = ["open ", "launch ", "close ", "kill "];
-    for (final cmd in commands) {
-      if (lower.startsWith(cmd)) {
-        return clean.substring(cmd.length).trim();
-      }
+    final match = commandRegex.firstMatch(clean);
+    if (match != null) {
+      return clean.substring(match.end).trim();
     }
     return clean;
   }
@@ -164,54 +246,148 @@ class IntentDetectionService {
 
   String extractContactName(String message) {
     String clean = message.trim();
-    final lower = clean.toLowerCase();
+    final commandRegex = RegExp(
+      r'^(call|dial|phone|ring|contact)\s+',
+      caseSensitive: false,
+    );
     
-    final commands = ["call ", "dial "];
-    for (final cmd in commands) {
-      if (lower.startsWith(cmd)) {
-        return clean.substring(cmd.length).trim();
-      }
+    final match = commandRegex.firstMatch(clean);
+    if (match != null) {
+      return clean.substring(match.end).trim();
     }
     return clean;
   }
 
   Map<String, String> extractSMSDetails(String message) {
     String clean = message.trim();
-    // formats: 
-    // "Send SMS to [Name] saying [Message]"
-    // "Text [Name] [Message]"
-    // "Message [Name] [Message]"
-    
-    // Simple parsing for "to X saying Y" pattern which is most natural
     final lower = clean.toLowerCase();
     
     String name = "";
     String body = "";
 
-    if (lower.contains(" to ") && lower.contains(" saying ")) {
+    // Pattern 1: "Send [Message] to [Name]"
+    // e.g., "Send hello there to John"
+    if (lower.contains(" to ")) {
       final toIndex = lower.indexOf(" to ");
-      final sayingIndex = lower.indexOf(" saying ");
+      // Check if "send" or "text" or "message" is at start
+      final prefixRegex = RegExp(r'^(send|write|shoot|text|message|msg)\s+', caseSensitive: false);
+      final match = prefixRegex.firstMatch(clean);
       
-      if (toIndex != -1 && sayingIndex != -1 && sayingIndex > toIndex) {
-        name = clean.substring(toIndex + 4, sayingIndex).trim();
-        body = clean.substring(sayingIndex + 8).trim();
-        return {'name': name, 'message': body};
+      if (match != null) {
+        // Everything between command and "to" is the message? 
+        // Or "Send message to [Name] saying [Body]"?
+        // Let's assume "Send [Body] to [Name]" first.
+        
+        final afterTo = clean.substring(toIndex + 4).trim();
+        final potentialBody = clean.substring(match.end, toIndex).trim();
+        
+        // If "potentialBody" is just "message" or "sms", then the body is likely after name?
+        // e.g., "Send message to John saying Hello"
+        if (potentialBody.toLowerCase().replaceAll(RegExp(r'^(a\s+)?(sms|text|message|msg)$'), '').trim().isEmpty) {
+             // It was just "Send message to..."
+             // Check for "saying"
+             if (lower.contains(" saying ")) {
+                final sayingIndex = lower.indexOf(" saying ");
+                if (sayingIndex > toIndex) {
+                   name = clean.substring(toIndex + 4, sayingIndex).trim();
+                   body = clean.substring(sayingIndex + 8).trim();
+                   return {'name': name, 'message': body};
+                }
+             }
+             // "Send message to John: Hello"
+             if (afterTo.contains(":")) {
+                final colonIndex = afterTo.indexOf(":");
+                name = afterTo.substring(0, colonIndex).trim();
+                body = afterTo.substring(colonIndex + 1).trim();
+                return {'name': name, 'message': body};
+             }
+             // Fallback: "Send message to John" (Body empty? or prompt user?)
+             name = afterTo;
+             return {'name': name, 'message': ''};
+        } else {
+           // Pattern: "Send Hello World to John"
+           // This is risky if the name is multi-word or body has "to". 
+           // But let's assume valid.
+           body = potentialBody;
+           name = afterTo;
+           return {'name': name, 'message': body};
+        }
       }
     }
 
-    // Fallback: Check for start commands
-    final commands = ["send sms to ", "text ", "message "];
-    for (final cmd in commands) {
-      if (lower.startsWith(cmd)) {
-        String remaining = clean.substring(cmd.length).trim();
-        // Assume first word is name, rest is message if no "saying"
-        final parts = remaining.split(' ');
-        if (parts.isNotEmpty) {
-           name = parts.first;
-           body = parts.skip(1).join(' ');
+    // Pattern 2: "Text [Name] [Message]" (Standard)
+    // "Text John I'll be late" or "Text 90196 71670 hello"
+    final commandRegex = RegExp(r'^(send|write|shoot|text|message|msg)\s+(a\s+)?(sms|text|message|msg)?\s*(to\s+)?', caseSensitive: false);
+    final match = commandRegex.firstMatch(clean);
+    
+    if (match != null) {
+      final remaining = clean.substring(match.end).trim();
+      
+      // New Token-Based Logic to handle "90196 71670"
+      final tokens = remaining.split(RegExp(r'\s+'));
+      
+      // Helper to check for letters
+      bool hasLetters(String s) => RegExp(r'[a-zA-Z]').hasMatch(s);
+
+      if (tokens.isNotEmpty) {
+        // Case A: Starts with a Name (Letters present)
+        if (hasLetters(tokens.first)) {
+           name = tokens.first;
+           // The rest is body
+           int nameIndex = remaining.indexOf(name);
+           if (nameIndex != -1) {
+              body = remaining.substring(nameIndex + name.length).trim();
+           }
+        } 
+        // Case B: Starts with Number (No letters)
+        else {
+           List<String> phoneParts = [];
+           int processedCount = 0;
+           int digitCount = 0;
+           bool startsWithPlus = tokens.first.startsWith('+');
+           // If starts with +, likely country code + number -> allow ~14 digits (e.g. +91 98765 43210 is 12 digits)
+           // If no +, assume standard local number -> 10 digits (India/US)
+           int maxDigits = startsWithPlus ? 14 : 10;
+           
+           for (var token in tokens) {
+              if (hasLetters(token)) {
+                 // Found the start of the message body (letters)
+                 break;
+              }
+              
+              // Count digits in this token
+              int tokenDigits = token.replaceAll(RegExp(r'[^0-9]'), '').length;
+              
+              // If we already have enough digits from previous tokens, this new numeric token is likely the body
+              // e.g. "98765 43210 1234" -> after 43210, count is 10. Next extraction should break.
+              if (digitCount >= maxDigits) {
+                 break;
+              }
+              
+              phoneParts.add(token);
+              processedCount++;
+              digitCount += tokenDigits;
+           }
+           
+           if (phoneParts.isNotEmpty) {
+              name = phoneParts.join(" "); 
+              
+              // Extract body strictly after the phone parts
+              int currentPos = 0;
+              for(int i=0; i<processedCount; i++) {
+                 int tokenPos = remaining.indexOf(tokens[i], currentPos);
+                 if (tokenPos != -1) {
+                    currentPos = tokenPos + tokens[i].length;
+                 }
+              }
+              if (currentPos < remaining.length) {
+                 body = remaining.substring(currentPos).trim();
+              }
+           }
         }
-        return {'name': name, 'message': body};
       }
+      
+      return {'name': name, 'message': body};
     }
 
     return {'name': '', 'message': ''};

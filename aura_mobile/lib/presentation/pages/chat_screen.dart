@@ -207,59 +207,100 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         itemBuilder: (context, index) {
                           final msg = chatState.messages[index];
                           final isUser = msg['role'] == 'user';
+                          final content = msg['content'] ?? '';
+                          
+                          // Parse Options
+                          String displayContent = content;
+                          List<Map<String, String>> options = [];
+                          
+                          final optionsRegex = RegExp(r'\[\[OPTIONS:(.*?)\]\]');
+                          final match = optionsRegex.firstMatch(content);
+                          if (match != null) {
+                            displayContent = content.substring(0, match.start).trim();
+                            final optionsStr = match.group(1) ?? "";
+                            options = optionsStr.split(',').map((e) {
+                              final parts = e.split('|');
+                              return {
+                                'label': parts[0].trim(),
+                                'value': parts.length > 1 ? parts[1].trim() : parts[0].trim()
+                              };
+                            }).toList();
+                          }
+
                           return Align(
                             alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(vertical: 8), // Increased spacing
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                              constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
-                              decoration: BoxDecoration(
-                                color: isUser ? const Color(0xFF2a2a30) : Colors.transparent, // Assistant is transparent/clean
-                                borderRadius: BorderRadius.circular(20).copyWith(
-                                  bottomRight: isUser ? Radius.zero : const Radius.circular(20),
-                                  bottomLeft: !isUser ? Radius.zero : const Radius.circular(20),
-                                ),
-                                border: isUser 
-                                    ? Border.all(color: const Color(0xFFc69c3a).withOpacity(0.3)) 
-                                    : null, // Only user has border/box
-                              ),
-                              child: MarkdownBody(
-                                data: msg['content'] ?? '',
-                                builders: {
-                                  'code': CodeElementBuilder(context),
-                                },
-                                styleSheet: MarkdownStyleSheet(
-                                  p: TextStyle(
-                                    color: isUser ? Colors.white : Colors.white.withOpacity(0.9),
-                                    fontSize: 16,
-                                    height: 1.5,
-                                    fontFamily: GoogleFonts.outfit().fontFamily,
+                            child: Column(
+                              crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                              children: [
+                                Container(
+                                  margin: const EdgeInsets.symmetric(vertical: 8), 
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                  constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
+                                  decoration: BoxDecoration(
+                                    color: isUser ? const Color(0xFF2a2a30) : Colors.transparent, 
+                                    borderRadius: BorderRadius.circular(20).copyWith(
+                                      bottomRight: isUser ? Radius.zero : const Radius.circular(20),
+                                      bottomLeft: !isUser ? Radius.zero : const Radius.circular(20),
+                                    ),
+                                    border: isUser 
+                                        ? Border.all(color: const Color(0xFFc69c3a).withOpacity(0.3)) 
+                                        : null, 
                                   ),
-                                  strong: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                                  a: const TextStyle(color: Color(0xFFc69c3a), decoration: TextDecoration.underline),
-                                  // Code block styling is now handled by CodeElementBuilder
-                                  // Inline code styling:
-                                  code: const TextStyle(
-                                      color: Color(0xFFe6cf8e), 
-                                      backgroundColor: Color(0xFF1a1a20), 
-                                      fontFamily: 'monospace',
-                                      fontSize: 14,
+                                  child: MarkdownBody(
+                                    data: displayContent,
+                                    builders: {
+                                      'code': CodeElementBuilder(context),
+                                    },
+                                    styleSheet: MarkdownStyleSheet(
+                                      p: TextStyle(
+                                        color: isUser ? Colors.white : Colors.white.withOpacity(0.9),
+                                        fontSize: 16,
+                                        height: 1.5,
+                                        fontFamily: GoogleFonts.outfit().fontFamily,
+                                      ),
+                                      strong: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                      a: const TextStyle(color: Color(0xFFc69c3a), decoration: TextDecoration.underline),
+                                      code: const TextStyle(
+                                          color: Color(0xFFe6cf8e), 
+                                          backgroundColor: Color(0xFF1a1a20), 
+                                          fontFamily: 'monospace',
+                                          fontSize: 14,
+                                      ),
+                                    ),
+                                    onTapLink: (text, href, title) async {
+                                      if (href != null) {
+                                        final Uri url = Uri.parse(href);
+                                        if (await canLaunchUrl(url)) {
+                                          await launchUrl(url, mode: LaunchMode.externalApplication);
+                                        } else {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(content: Text('Could not launch $href')),
+                                          );
+                                        }
+                                      }
+                                    },
+                                    selectable: true,
                                   ),
                                 ),
-                                onTapLink: (text, href, title) async {
-                                  if (href != null) {
-                                    final Uri url = Uri.parse(href);
-                                    if (await canLaunchUrl(url)) {
-                                      await launchUrl(url, mode: LaunchMode.externalApplication);
-                                    } else {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('Could not launch $href')),
-                                      );
-                                    }
-                                  }
-                                },
-                                selectable: true,
-                              ),
+                                if (options.isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 16, bottom: 8),
+                                    child: Wrap(
+                                      spacing: 8,
+                                      runSpacing: 8,
+                                      children: options.map((opt) {
+                                        return ActionChip(
+                                          label: Text(opt['label']!, style: GoogleFonts.outfit(color: Colors.white)),
+                                          backgroundColor: const Color(0xFF2a2a30),
+                                          side: const BorderSide(color: Color(0xFFc69c3a)),
+                                          onPressed: () {
+                                            _sendMessage(opt['value']!);
+                                          },
+                                        );
+                                      }).toList(),
+                                    ),
+                                  ),
+                              ],
                             ),
                           );
                         },

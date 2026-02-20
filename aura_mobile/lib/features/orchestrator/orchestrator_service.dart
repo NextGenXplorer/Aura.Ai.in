@@ -91,9 +91,29 @@ class OrchestratorService {
         break;
 
       case IntentType.dialContact:
-        final contact = _intentService.extractContactName(message);
-        yield "📞 **Dialing $contact...**";
-        await _appControlService.dialContact(contact);
+        final contactName = _intentService.extractContactName(message);
+        final matches = await _appControlService.resolveContacts(contactName);
+
+        if (matches.isEmpty) {
+           // Fallback to old behavior (let dialer handle it or say not found)
+           yield "📞 **Dialing $contactName...**";
+           await _appControlService.dialContact(contactName);
+        } else if (matches.length == 1) {
+           final number = matches.first.phones.isNotEmpty ? matches.first.phones.first.number : '';
+           if (number.isNotEmpty) {
+             yield "📞 **Dialing ${matches.first.displayName}...**";
+             await _appControlService.dialContact(number);
+           } else {
+             yield "❌ Contact ${matches.first.displayName} has no phone number.";
+           }
+        } else {
+           // Multiple matches
+           final options = matches.take(5).map((c) {
+              final number = c.phones.isNotEmpty ? c.phones.first.number : '';
+              return "${c.displayName}|Call $number"; 
+           }).join(",");
+           yield "I found multiple contacts for '$contactName'. Who did you mean? [[OPTIONS:$options]]";
+        }
         break;
 
       case IntentType.sendSMS:
@@ -102,10 +122,42 @@ class OrchestratorService {
         final body = details['message'] ?? '';
         
         if (name.isNotEmpty) {
-           yield "📨 **Opening SMS to $name...**\nMessage: \"$body\"";
-           await _appControlService.sendSMS(name, body);
+           final matches = await _appControlService.resolveContacts(name);
+           
+           if (matches.isEmpty) {
+              yield "📨 **Opening SMS to $name...**";
+              await _appControlService.sendSMS(name, body);
+           } else if (matches.length == 1) {
+              final number = matches.first.phones.isNotEmpty ? matches.first.phones.first.number : '';
+              if (number.isNotEmpty) {
+                 yield "📨 **Opening SMS to ${matches.first.displayName}...**\nMessage: \"$body\"";
+                 await _appControlService.sendSMS(number, body);
+              } else {
+                 yield "❌ Contact ${matches.first.displayName} has no phone number.";
+              }
+           } else {
+              // Multiple matches
+              final options = matches.take(5).map((c) {
+                 final number = c.phones.isNotEmpty ? c.phones.first.number : '';
+                 return "${c.displayName}|Text $number $body";
+              }).join(",");
+              yield "I found multiple contacts for '$name'. Who did you mean? [[OPTIONS:$options]]";
+           }
         } else {
            yield "❌ I couldn't understand who to send the message to. Please try 'Send SMS to [Name] saying [Message]'.";
+        }
+        break;
+
+      case IntentType.torchControl:
+        final lower = message.toLowerCase();
+        final isOff = lower.contains("off") || lower.contains("disable") || lower.contains("stop");
+        final state = !isOff;
+        
+        yield state ? "💡 **Turning Flashlight ON...**" : "🌑 **Turning Flashlight OFF...**";
+        try {
+           await _appControlService.toggleTorch(state);
+        } catch (e) {
+           yield "❌ Failed to toggle flashlight. It might not be available or permitted.";
         }
         break;
 

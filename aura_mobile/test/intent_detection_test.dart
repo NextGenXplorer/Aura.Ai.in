@@ -38,5 +38,20 @@ void main() {
       expect(service.extractMemoryContent('save this meeting at 5pm'), 'meeting at 5pm');
       expect(service.extractMemoryContent('note that the sky is blue'), 'the sky is blue');
     });
+
+    test('Extracts SMS Details Correctly', () {
+      // Standard
+      expect(service.extractSMSDetails('Text John Hello'), {'name': 'John', 'message': 'Hello'});
+      
+      // Spaced Number
+      expect(service.extractSMSDetails('Text 90196 71670 as hai'), {'name': '90196 71670', 'message': 'as hai'});
+      
+      // Country Code
+      expect(service.extractSMSDetails('Text +91 90196 71670 works'), {'name': '+91 90196 71670', 'message': 'works'});
+      
+      // Send ... to ... checking preservation
+      // "Send hello to John" -> Name: John, Message: hello (via Pattern 1)
+      expect(service.extractSMSDetails('Send hello to John'), {'name': 'John', 'message': 'hello'});
+    });
   });
 }
