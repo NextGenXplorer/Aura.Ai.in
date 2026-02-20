@@ -21,12 +21,16 @@ class AssistantForegroundService : Service() {
     companion object {
         var currentState: String = "IDLE"
         const val ACTION_LISTEN_NOW = "com.aura.mobile.assistant.LISTEN_NOW"
+        const val ACTION_CANCEL = "com.aura.mobile.assistant.CANCEL"
     }
 
-    // Receives the notification action button tap
-    private val notificationListenReceiver = object : android.content.BroadcastReceiver() {
+    // Receives the notification action button tap and cancel actions
+    private val actionReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: Intent?) {
-            if (intent?.action == ACTION_LISTEN_NOW) triggerAssistant()
+            when (intent?.action) {
+                ACTION_LISTEN_NOW -> triggerAssistant()
+                ACTION_CANCEL -> cancelAssistant()
+            }
         }
     }
 
@@ -98,18 +102,33 @@ class AssistantForegroundService : Service() {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
         }
-        registerReceiver(powerButtonDetector, powerFilter)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(powerButtonDetector, powerFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(powerButtonDetector, powerFilter)
+        }
 
         // Listen for gesture mode changes from settings page
         val gestureModeFilter = IntentFilter("com.aura.mobile.assistant.SET_GESTURE_MODE")
-        registerReceiver(gestureModeReceiver, gestureModeFilter)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(gestureModeReceiver, gestureModeFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(gestureModeReceiver, gestureModeFilter)
+        }
 
         // Show the floating mic bubble (easy one-tap trigger)
         overlayManager.showFloatingBubble { triggerAssistant() }
 
-        // Listen for notification action taps (another easy trigger)
-        val notifFilter = IntentFilter(ACTION_LISTEN_NOW)
-        registerReceiver(notificationListenReceiver, notifFilter)
+        // Listen for notification action taps and cancel actions
+        val actionFilter = IntentFilter().apply {
+            addAction(ACTION_LISTEN_NOW)
+            addAction(ACTION_CANCEL)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(actionReceiver, actionFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(actionReceiver, actionFilter)
+        }
     }
 
     /** Shared trigger for both shake and power-button activation */
@@ -120,6 +139,16 @@ class AssistantForegroundService : Service() {
         overlayManager.showOverlay("LISTENING")
         ttsManager.speak("Listening")
         voiceRecognitionService.startListening()
+    }
+
+    private fun cancelAssistant() {
+        voiceRecognitionService.stopListening()
+        ttsManager.stop()
+        isWaitingForConfirmation = false
+        isWaitingForMessage = false
+        isWaitingForContactSelection = false
+        pendingCommand = null
+        broadcastState("IDLE")
     }
 
     private fun broadcastState(state: String) {
@@ -311,7 +340,7 @@ class AssistantForegroundService : Service() {
         overlayManager.hideFloatingBubble()
         try { unregisterReceiver(powerButtonDetector) } catch (e: Exception) { }
         try { unregisterReceiver(gestureModeReceiver) } catch (e: Exception) { }
-        try { unregisterReceiver(notificationListenReceiver) } catch (e: Exception) { }
+        try { unregisterReceiver(actionReceiver) } catch (e: Exception) { }
     }
 
     override fun onBind(intent: Intent?): IBinder? {

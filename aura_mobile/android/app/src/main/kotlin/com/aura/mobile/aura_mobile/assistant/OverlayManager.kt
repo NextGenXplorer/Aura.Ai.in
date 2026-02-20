@@ -39,6 +39,7 @@ class OverlayManager(private val context: Context) {
     // Floating mic bubble
     private var bubbleView: View? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
+    private var removeRunnable: Runnable? = null
 
     fun canDrawOverlays(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -52,9 +53,12 @@ class OverlayManager(private val context: Context) {
             return
         }
         handler.post {
+            removeRunnable?.let { handler.removeCallbacks(it) }
             if (overlayView == null) {
                 createAndAddOverlayView()
             }
+            // Always ensure the overlay is touchable when shown
+            setTouchable(true)
             updateState(state)
         }
     }
@@ -77,8 +81,7 @@ class OverlayManager(private val context: Context) {
                     startSpinAnimation(orbView)
                 }
                 "IDLE" -> {
-                    stopAnimations()
-                    hideOverlayPanel()
+                    hideOverlay()
                 }
             }
         }
@@ -86,14 +89,38 @@ class OverlayManager(private val context: Context) {
 
     fun hideOverlay() {
         handler.post {
+            if (overlayView == null) return@post
+            
+            // Immediately let touches pass through to the app underneath
+            setTouchable(false)
+
+            // Animate out before removing
+            val panel: View? = overlayView?.findViewWithTag("panel")
+            val dimBg: View? = overlayView?.findViewWithTag("dim_bg")
+
             stopAnimations()
-            try {
-                overlayView?.let { windowManager.removeView(it) }
-            } catch (e: Exception) {
-                Log.e("OverlayManager", "Error removing overlay: ${e.message}")
+            val duration = 300L
+            
+            panel?.let {
+                ObjectAnimator.ofFloat(it, "translationY", it.translationY, dpToPx(320).toFloat())
+                    .apply { this.duration = duration; start() }
             }
-            overlayView = null
-            isShowing = false
+            dimBg?.let {
+                ObjectAnimator.ofFloat(it, "alpha", it.alpha, 0f).apply { this.duration = duration; start() }
+            }
+
+            // Delay removal until animation completes
+            removeRunnable?.let { handler.removeCallbacks(it) }
+            removeRunnable = Runnable {
+                try {
+                    overlayView?.let { windowManager.removeViewImmediate(it) }
+                } catch (e: Exception) {
+                    Log.e("OverlayManager", "Error removing overlay: ${e.message}")
+                }
+                overlayView = null
+                isShowing = false
+            }
+            handler.postDelayed(removeRunnable!!, duration + 50)
         }
     }
 
@@ -126,8 +153,8 @@ class OverlayManager(private val context: Context) {
             val bubble = FrameLayout(context)
             val bg = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.argb(220, 198, 156, 58))
-                setStroke(dpToPx(2), Color.argb(120, 255, 255, 255))
+                colors = intArrayOf(Color.parseColor("#2b5876"), Color.parseColor("#4e4376")) // sleek purple/blue gradient
+                setStroke(dpToPx(2), Color.argb(80, 255, 255, 255))
             }
             bubble.background = bg
 
@@ -214,8 +241,7 @@ class OverlayManager(private val context: Context) {
                 @Suppress("DEPRECATION")
                 WindowManager.LayoutParams.TYPE_PHONE
             },
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                     WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
                     WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON,
@@ -226,7 +252,18 @@ class OverlayManager(private val context: Context) {
 
         val params = windowParams!!
 
-        val rootFrame = FrameLayout(context)
+        val rootFrame = object : FrameLayout(context) {
+            override fun dispatchKeyEvent(event: android.view.KeyEvent?): Boolean {
+                if (event?.keyCode == android.view.KeyEvent.KEYCODE_BACK && event.action == android.view.KeyEvent.ACTION_UP) {
+                    hideOverlay()
+                    val cancelIntent = android.content.Intent("com.aura.mobile.assistant.CANCEL")
+                    cancelIntent.setPackage(context.packageName)
+                    context.sendBroadcast(cancelIntent)
+                    return true
+                }
+                return super.dispatchKeyEvent(event)
+            }
+        }
         rootFrame.setBackgroundColor(Color.TRANSPARENT)
 
         // Full-screen dim overlay
@@ -234,6 +271,13 @@ class OverlayManager(private val context: Context) {
         dimBackground.setBackgroundColor(Color.argb(100, 0, 0, 0))
         dimBackground.alpha = 0f
         dimBackground.tag = "dim_bg"
+        dimBackground.setOnClickListener {
+            // Dismiss assistant when tapping outside the panel
+            hideOverlay()
+            val cancelIntent = android.content.Intent("com.aura.mobile.assistant.CANCEL")
+            cancelIntent.setPackage(context.packageName)
+            context.sendBroadcast(cancelIntent)
+        }
         rootFrame.addView(dimBackground, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
@@ -242,19 +286,47 @@ class OverlayManager(private val context: Context) {
         // Sliding panel
         val panelLayout = FrameLayout(context)
         panelLayout.tag = "panel"
-        panelLayout.translationY = dpToPx(350).toFloat()
+        panelLayout.translationY = dpToPx(320).toFloat()
 
         val innerPanel = FrameLayout(context)
         innerPanel.tag = "inner_panel"
-        innerPanel.setBackgroundColor(Color.argb(235, 20, 20, 26))
+        
+        // Modern rounded top background
+        val panelBg = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(Color.parseColor("#1E1E24")) // sleek dark background
+            cornerRadii = floatArrayOf(
+                dpToPx(24).toFloat(), dpToPx(24).toFloat(), // top left
+                dpToPx(24).toFloat(), dpToPx(24).toFloat(), // top right
+                0f, 0f, // bottom right
+                0f, 0f  // bottom left
+            )
+        }
+        innerPanel.background = panelBg
+        innerPanel.elevation = dpToPx(16).toFloat()
+        
+        // Sleek Drag Handle Indicator
+        val dragHandle = View(context).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpToPx(4).toFloat()
+                setColor(Color.parseColor("#50505A"))
+            }
+        }
+        val handleParams = FrameLayout.LayoutParams(dpToPx(36), dpToPx(4)).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            setMargins(0, dpToPx(12), 0, 0)
+        }
+        innerPanel.addView(dragHandle, handleParams)
 
         val statusTextView = TextView(context)
         statusTextView.text = "Hi there, I'm listening..."
-        statusTextView.setTextColor(Color.WHITE)
-        statusTextView.textSize = 22f
+        statusTextView.setTextColor(Color.parseColor("#E0E0E0"))
+        statusTextView.textSize = 24f
+        statusTextView.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
         statusTextView.gravity = Gravity.CENTER
         statusTextView.tag = "status_text"
-        statusTextView.setPadding(40, 80, 40, 40)
+        statusTextView.setPadding(40, dpToPx(32), 40, dpToPx(16))
         val statusParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.WRAP_CONTENT
@@ -286,7 +358,7 @@ class OverlayManager(private val context: Context) {
 
         val panelParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
-            dpToPx(350)
+            dpToPx(320)
         )
         panelParams.gravity = Gravity.BOTTOM
         rootFrame.addView(panelLayout, panelParams)
@@ -389,11 +461,14 @@ class OverlayManager(private val context: Context) {
     private fun createContactButtonBackground(): GradientDrawable {
         return GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = dpToPx(12).toFloat()
-            setColor(Color.argb(80, 198, 156, 58)) // semi-transparent gold
-            setStroke(dpToPx(1), Color.argb(160, 198, 156, 58))
+            cornerRadius = dpToPx(16).toFloat()
+            setColor(Color.parseColor("#2A2A35")) // slightly lighter than bg
+            setStroke(dpToPx(1), Color.parseColor("#4facfe")) // subtle blue border
         }
     }
+
+    private var panelAnimator: ObjectAnimator? = null
+    private var dimAnimator: ObjectAnimator? = null
 
     private fun showOverlayPanel() {
         if (isShowing) return
@@ -401,10 +476,15 @@ class OverlayManager(private val context: Context) {
         val panel: View = overlayView?.findViewWithTag("panel") ?: return
         val dimBg: View? = overlayView?.findViewWithTag("dim_bg")
 
-        ObjectAnimator.ofFloat(panel, "translationY", dpToPx(350).toFloat(), 0f)
-            .apply { duration = 400; start() }
+        panelAnimator?.cancel()
+        dimAnimator?.cancel()
+
+        panelAnimator = ObjectAnimator.ofFloat(panel, "translationY", panel.translationY, 0f)
+            .apply { duration = 400; interpolator = android.view.animation.DecelerateInterpolator(); start() }
+        
         dimBg?.let {
-            ObjectAnimator.ofFloat(it, "alpha", 0f, 1f).apply { duration = 400; start() }
+            dimAnimator = ObjectAnimator.ofFloat(it, "alpha", it.alpha, 1f)
+                .apply { duration = 400; start() }
         }
     }
 
@@ -414,10 +494,15 @@ class OverlayManager(private val context: Context) {
         val panel: View = overlayView?.findViewWithTag("panel") ?: return
         val dimBg: View? = overlayView?.findViewWithTag("dim_bg")
 
-        ObjectAnimator.ofFloat(panel, "translationY", 0f, dpToPx(350).toFloat())
-            .apply { duration = 300; start() }
+        panelAnimator?.cancel()
+        dimAnimator?.cancel()
+
+        panelAnimator = ObjectAnimator.ofFloat(panel, "translationY", panel.translationY, dpToPx(320).toFloat())
+            .apply { duration = 300; interpolator = android.view.animation.AccelerateInterpolator(); start() }
+            
         dimBg?.let {
-            ObjectAnimator.ofFloat(it, "alpha", 1f, 0f).apply { duration = 300; start() }
+            dimAnimator = ObjectAnimator.ofFloat(it, "alpha", it.alpha, 0f)
+                .apply { duration = 300; start() }
         }
     }
 
@@ -425,20 +510,23 @@ class OverlayManager(private val context: Context) {
         view ?: return
         stopAnimations()
 
-        val alphaAnim = ObjectAnimator.ofFloat(view, "alpha", 0.7f, 1.0f).apply {
-            duration = 900
+        val alphaAnim = ObjectAnimator.ofFloat(view, "alpha", 0.6f, 1.0f).apply {
+            duration = 1000
             repeatCount = ObjectAnimator.INFINITE
             repeatMode = ObjectAnimator.REVERSE
+            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
         }
-        val scaleXAnim = ObjectAnimator.ofFloat(view, "scaleX", 1.0f, 1.2f).apply {
-            duration = 900
+        val scaleXAnim = ObjectAnimator.ofFloat(view, "scaleX", 1.0f, 1.15f).apply {
+            duration = 1000
             repeatCount = ObjectAnimator.INFINITE
             repeatMode = ObjectAnimator.REVERSE
+            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
         }
-        val scaleYAnim = ObjectAnimator.ofFloat(view, "scaleY", 1.0f, 1.2f).apply {
-            duration = 900
+        val scaleYAnim = ObjectAnimator.ofFloat(view, "scaleY", 1.0f, 1.15f).apply {
+            duration = 1000
             repeatCount = ObjectAnimator.INFINITE
             repeatMode = ObjectAnimator.REVERSE
+            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
         }
         activeAnimators.addAll(listOf(alphaAnim, scaleXAnim, scaleYAnim))
         activeAnimators.forEach { it.start() }
@@ -470,11 +558,11 @@ class OverlayManager(private val context: Context) {
             shape = GradientDrawable.OVAL
             gradientType = GradientDrawable.RADIAL_GRADIENT
             colors = intArrayOf(
-                Color.argb(229, 198, 156, 58),
-                Color.argb(127, 198, 156, 58),
+                Color.parseColor("#4facfe"), // vibrant blue center
+                Color.parseColor("#00f2fe"), // cyan outer
                 Color.TRANSPARENT
             )
-            setGradientRadius(dpToPx(50).toFloat())
+            setGradientRadius(dpToPx(60).toFloat()) // Slightly larger blur radius
         }
     }
 

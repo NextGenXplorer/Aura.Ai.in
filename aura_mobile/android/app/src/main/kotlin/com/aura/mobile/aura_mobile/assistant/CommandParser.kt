@@ -5,6 +5,15 @@ sealed class ParsedCommand {
     data class CallContact(val contactName: String) : ParsedCommand()
     data class SendSms(val contactName: String, val message: String) : ParsedCommand()
     data class TurnTorch(val state: Boolean) : ParsedCommand()
+    data class SetTimer(val minutes: Int) : ParsedCommand()
+    data class SetAlarm(val hour: Int, val minute: Int) : ParsedCommand()
+    data class WebSearch(val query: String) : ParsedCommand()
+    data class PlayYouTube(val query: String) : ParsedCommand()
+    object GetTime : ParsedCommand()
+    object GetDate : ParsedCommand()
+    object GetBattery : ParsedCommand()
+    object MaxVolume : ParsedCommand()
+    object MuteVolume : ParsedCommand()
     object OpenCamera : ParsedCommand()
     object OpenWifiSettings : ParsedCommand()
     object OpenBluetoothSettings : ParsedCommand()
@@ -14,15 +23,33 @@ sealed class ParsedCommand {
 
 object CommandParser {
     fun parse(rawText: String): ParsedCommand {
-        val text = rawText.lowercase().trim()
+        var text = rawText.lowercase().trim()
+
+        // 1. Remove filler words to make parsing robust
+        val fillers = listOf("can you ", "could you ", "please ", "for me", "hey aura ", "aura ", "just ", "quickly ")
+        for (filler in fillers) {
+            text = text.replace(filler, "")
+        }
+        text = text.trim()
+
+        // YouTube Search / Play
+        if (text.contains("on youtube") || text.contains("in youtube") || text.startsWith("play ") || text.startsWith("youtube ")) {
+            var query = text.replace("play ", "")
+                .replace("on youtube", "")
+                .replace("in youtube", "")
+                .replace("open ", "")
+                .replace("search for ", "")
+                .replace("youtube ", "")
+                .trim()
+            if (query.isNotEmpty() && (text.contains("youtube") || text.startsWith("play "))) {
+                return ParsedCommand.PlayYouTube(query)
+            }
+        }
 
         // Open App
-        if (text.startsWith("open ") && !text.contains("camera") && !text.contains("settings") && !text.contains("wifi") && !text.contains("bluetooth")) {
-            val appName = text.removePrefix("open ").trim()
-            if (appName.isNotEmpty()) return ParsedCommand.OpenApp(appName)
-        }
-        if (text.startsWith("launch ")) {
-            val appName = text.removePrefix("launch ").trim()
+        if ((text.startsWith("open ") || text.startsWith("launch ") || text.startsWith("start ")) && 
+            !text.contains("camera") && !text.contains("settings") && !text.contains("wifi") && !text.contains("bluetooth")) {
+            val appName = text.replace("open ", "").replace("launch ", "").replace("start ", "").trim()
             if (appName.isNotEmpty()) return ParsedCommand.OpenApp(appName)
         }
 
@@ -68,8 +95,50 @@ object CommandParser {
             return ParsedCommand.TurnTorch(false)
         }
 
+        // Time & Date
+        if (text.contains("what time is it") || text == "time") {
+            return ParsedCommand.GetTime
+        }
+        if (text.contains("what is today") || text.contains("today's date") || text == "date") {
+            return ParsedCommand.GetDate
+        }
+
+        // Battery
+        if (text.contains("battery") || text.contains("how much juice")) {
+            return ParsedCommand.GetBattery
+        }
+
+        // Volume
+        if (text.contains("max volume") || text.contains("volume to max") || text.contains("turn it up")) {
+            return ParsedCommand.MaxVolume
+        }
+        if (text.contains("mute") || text.contains("silence my phone")) {
+            return ParsedCommand.MuteVolume
+        }
+
+        // Timers & Alarms (Basic regex parsing)
+        if (text.contains("timer for")) {
+            val words = text.split(" ")
+            for (i in words.indices) {
+                if (words[i] == "timer" || words[i] == "for") {
+                    val num = words.getOrNull(i + 1)?.toIntOrNull()
+                        ?: words.getOrNull(i + 2)?.toIntOrNull()
+                    if (num != null) {
+                        return ParsedCommand.SetTimer(num)
+                    }
+                }
+            }
+        }
+
+        // Web Search
+        if (text.startsWith("search ") || text.startsWith("google ") || text.startsWith("look up ")) {
+            val query = text.replace("search for ", "").replace("search ", "")
+                            .replace("google ", "").replace("look up ", "").trim()
+            if (query.isNotEmpty()) return ParsedCommand.WebSearch(query)
+        }
+
         // Open Camera
-        if (text.contains("open camera") || text.contains("take photo")) {
+        if (text.contains("open camera") || text.contains("take photo") || text.contains("take a picture")) {
             return ParsedCommand.OpenCamera
         }
 

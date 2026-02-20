@@ -8,6 +8,12 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.telephony.SmsManager
 import android.hardware.camera2.CameraManager
+import android.media.AudioManager
+import android.os.BatteryManager
+import android.provider.AlarmClock
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class DeviceControlService(private val context: Context) {
 
@@ -72,6 +78,15 @@ class DeviceControlService(private val context: Context) {
                 // Should only be called if properly confirmed. AssistantForegroundService will handle confirmation logic.
             }
             is ParsedCommand.TurnTorch -> turnTorch(command.state, ttsManager)
+            is ParsedCommand.SetTimer -> setTimer(command.minutes, ttsManager)
+            is ParsedCommand.SetAlarm -> setAlarm(command.hour, command.minute, ttsManager)
+            is ParsedCommand.WebSearch -> searchWeb(command.query, ttsManager)
+            is ParsedCommand.PlayYouTube -> searchYouTube(command.query, ttsManager)
+            is ParsedCommand.GetTime -> speakTime(ttsManager)
+            is ParsedCommand.GetDate -> speakDate(ttsManager)
+            is ParsedCommand.GetBattery -> speakBattery(ttsManager)
+            is ParsedCommand.MaxVolume -> setVolume(true, ttsManager)
+            is ParsedCommand.MuteVolume -> setVolume(false, ttsManager)
             is ParsedCommand.OpenCamera -> openCamera(ttsManager)
             is ParsedCommand.OpenWifiSettings -> openWifiSettings(ttsManager)
             is ParsedCommand.OpenBluetoothSettings -> openBluetoothSettings(ttsManager)
@@ -229,5 +244,102 @@ class DeviceControlService(private val context: Context) {
             context.startActivity(intent)
             ttsManager?.speak("Opening settings")
         } catch (e: Exception) { }
+    }
+
+    private fun setTimer(minutes: Int, ttsManager: TtsManager?) {
+        try {
+            val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(AlarmClock.EXTRA_MESSAGE, "AURA Timer")
+                putExtra(AlarmClock.EXTRA_LENGTH, minutes * 60)
+                putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+            }
+            context.startActivity(intent)
+            ttsManager?.speak("Timer set for $minutes minutes")
+        } catch (e: Exception) {
+            ttsManager?.speak("Failed to set timer")
+        }
+    }
+
+    private fun setAlarm(hour: Int, minute: Int, ttsManager: TtsManager?) {
+        try {
+            val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(AlarmClock.EXTRA_MESSAGE, "AURA Alarm")
+                putExtra(AlarmClock.EXTRA_HOUR, hour)
+                putExtra(AlarmClock.EXTRA_MINUTES, minute)
+                putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+            }
+            context.startActivity(intent)
+            ttsManager?.speak("Alarm set for $hour and $minute minutes")
+        } catch (e: Exception) {
+            ttsManager?.speak("Failed to set alarm")
+        }
+    }
+
+    private fun searchWeb(query: String, ttsManager: TtsManager?) {
+        try {
+            val intent = Intent(Intent.ACTION_WEB_SEARCH).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(android.app.SearchManager.QUERY, query)
+            }
+            context.startActivity(intent)
+            ttsManager?.speak("Searching Google for $query")
+        } catch (e: Exception) {
+            ttsManager?.speak("Could not open web search")
+        }
+    }
+
+    private fun searchYouTube(query: String, ttsManager: TtsManager?) {
+        try {
+            // Using ACTION_VIEW with youtube search URI often forces the app to open and sometimes auto-play the top result 
+            // depending on the YouTube app version. 
+            val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.youtube.com/results?search_query=$query"))
+            intent.setPackage("com.google.android.youtube")
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            ttsManager?.speak("Playing $query on YouTube")
+        } catch (e: Exception) {
+            // Fallback to web search if youtube app is not installed
+            searchWeb("$query youtube", ttsManager)
+        }
+    }
+
+    private fun speakTime(ttsManager: TtsManager?) {
+        val time = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date())
+        ttsManager?.speak("It is currently $time")
+    }
+
+    private fun speakDate(ttsManager: TtsManager?) {
+        val date = SimpleDateFormat("EEEE, MMMM dth", Locale.getDefault()).format(Date())
+        ttsManager?.speak("Today is $date")
+    }
+
+    private fun speakBattery(ttsManager: TtsManager?) {
+        try {
+            val bm = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            val batLevel = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            ttsManager?.speak("Your battery is at $batLevel percent")
+        } catch (e: Exception) {
+            ttsManager?.speak("I cannot check the battery right now")
+        }
+    }
+
+    private fun setVolume(max: Boolean, ttsManager: TtsManager?) {
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val flags = AudioManager.FLAG_SHOW_UI
+            
+            if (max) {
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVol, flags)
+                ttsManager?.speak("Volume set to maximum")
+            } else {
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, flags)
+                ttsManager?.speak("Volume muted")
+            }
+        } catch (e: Exception) {
+            ttsManager?.speak("Failed to change volume")
+        }
     }
 }
