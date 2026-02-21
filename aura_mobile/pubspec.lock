@@ -448,14 +448,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.4.4"
-  freezer:
-    dependency: "direct dev"
-    description:
-      name: freezer
-      sha256: "22f4d432f64f9abeba0ef21242bb8ce9cedb01dbb2995079ff2bbef620206c88"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.6.1"
   frontend_server_client:
     dependency: transitive
     description:
