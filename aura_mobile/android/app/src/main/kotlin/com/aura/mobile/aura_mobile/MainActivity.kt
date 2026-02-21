@@ -15,10 +15,20 @@ class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.aura.ai/memory"
     private val APP_CONTROL_CHANNEL = "com.aura.ai/app_control"
     private val ASSISTANT_STATE_CHANNEL = "com.aura.ai/assistant_state"
+    private val ASSISTANT_AI_CHANNEL = "com.aura.ai/assistant_ai"
 
     private var assistantStateSink: EventChannel.EventSink? = null
+    private var assistantAiChannel: MethodChannel? = null
 
     private val assistantStateReceiver = object : BroadcastReceiver() {
+        /**
+         * Receives assistant state change broadcasts and forwards the `"state"` extra to the Flutter event sink.
+         *
+         * If the intent contains a string extra named `"state"`, that value is sent to `assistantStateSink`.
+         *
+         * @param context The Context in which the receiver is running, or null.
+         * @param intent The incoming broadcast Intent which may contain the `"state"` string extra.
+         */
         override fun onReceive(context: Context?, intent: Intent?) {
             val state = intent?.getStringExtra("state")
             if (state != null) {
@@ -27,6 +37,30 @@ class MainActivity: FlutterActivity() {
         }
     }
 
+    // Receives AI_REQUEST from AssistantForegroundService, forwards to Flutter
+    private val aiRequestReceiver = object : BroadcastReceiver() {
+        /**
+         * Forwards an incoming AI request Intent's "query" extra to Flutter by invoking `processAIQuery`
+         * on the assistant AI channel.
+         *
+         * If the Intent does not contain a "query" extra, the method performs no action.
+         *
+         * @param context The Context in which the receiver is running.
+         * @param intent The broadcast Intent expected to contain a string extra named "query".
+         */
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val query = intent?.getStringExtra("query") ?: return
+            assistantAiChannel?.invokeMethod("processAIQuery", query)
+        }
+    }
+
+    /**
+     * Configures the activity window to appear on the lock screen, turn the screen on, and keep it awake.
+     *
+     * Uses modern APIs (`setShowWhenLocked` / `setTurnScreenOn`) on Android O MR1 and newer, and falls back
+     * to legacy window flags on older Android versions. Also adds the flag to keep the screen on while this
+     * activity is visible.
+     */
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
@@ -41,6 +75,16 @@ class MainActivity: FlutterActivity() {
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
+    /**
+     * Sets up Flutter-native integration: registers channels, handlers, and broadcast receivers used by the app.
+     *
+     * Configures an EventChannel for assistant state events, a MethodChannel for assistant AI interactions,
+     * a MethodChannel for memory queries, and a MethodChannel for app-control operations (open apps, settings,
+     * camera, calls, SMS, torch, assistant lifecycle, gesture mode, etc.). Also registers the broadcast receiver
+     * that forwards AI requests to Flutter and ensures native-to-Flutter and Flutter-to-native messaging is wired.
+     *
+     * @param flutterEngine The FlutterEngine instance used to create channels and attach native handlers.
+     */
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -68,6 +112,29 @@ class MainActivity: FlutterActivity() {
             }
         )
         
+        // Assistant AI Channel — bridges native voice assistant to Flutter AI pipeline
+        assistantAiChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ASSISTANT_AI_CHANNEL)
+        assistantAiChannel!!.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "sendAIResponse" -> {
+                    val response = call.arguments as? String ?: ""
+                    val responseIntent = Intent("com.aura.mobile.assistant.AI_RESPONSE")
+                    responseIntent.putExtra("response", response)
+                    sendBroadcast(responseIntent)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // Register receiver for AI requests from the foreground service
+        val aiRequestFilter = IntentFilter("com.aura.mobile.assistant.AI_REQUEST")
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(aiRequestReceiver, aiRequestFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(aiRequestReceiver, aiRequestFilter)
+        }
+
         // Memory Channel
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             if (call.method == "getAvailableMemory") {
@@ -403,6 +470,18 @@ class MainActivity: FlutterActivity() {
         }
     }
 
+    /**
+     * Enables or disables the device torch (camera flash).
+     *
+     * Requires Android M (API 23) or higher; if the device is older, an "UNSUPPORTED" error is returned via `result`.
+     *
+     * @param state true to turn the torch on, false to turn it off.
+     * @param result MethodChannel.Result used to deliver a success message on success or an error on failure.
+     *               Possible error codes returned via `result.error`:
+     *               - "UNSUPPORTED": Android version does not support torch control.
+     *               - "NO_FLASH": no camera with flash was found.
+     *               - "TORCH_ERROR": an exception occurred while toggling the torch.
+     */
     private fun toggleTorch(state: Boolean, result: MethodChannel.Result) {
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M) {
             result.error("UNSUPPORTED", "Torch requires Android M+", null)
@@ -430,5 +509,16 @@ class MainActivity: FlutterActivity() {
         } catch (e: Exception) {
             result.error("TORCH_ERROR", e.message, null)
         }
+    }
+
+    /**
+     * Cleans up resources when the activity is destroyed.
+     *
+     * Unregisters the AI request BroadcastReceiver if it is registered; any exception thrown during
+     * unregistration is ignored.
+     */
+    override fun onDestroy() {
+        super.onDestroy()
+        try { unregisterReceiver(aiRequestReceiver) } catch (_: Exception) { }
     }
 }
