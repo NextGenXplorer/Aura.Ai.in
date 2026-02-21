@@ -22,6 +22,8 @@ class AssistantForegroundService : Service() {
         var currentState: String = "IDLE"
         const val ACTION_LISTEN_NOW = "com.aura.mobile.assistant.LISTEN_NOW"
         const val ACTION_CANCEL = "com.aura.mobile.assistant.CANCEL"
+        const val ACTION_AI_REQUEST = "com.aura.mobile.assistant.AI_REQUEST"
+        const val ACTION_AI_RESPONSE = "com.aura.mobile.assistant.AI_RESPONSE"
     }
 
     // Receives the notification action button tap and cancel actions
@@ -50,6 +52,38 @@ class AssistantForegroundService : Service() {
     private var pendingCommand: ParsedCommand? = null
     private var pendingCallContacts: List<DeviceControlService.ContactMatch> = emptyList()
 
+    private var isWaitingForAI = false
+    private val aiTimeoutHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val aiTimeoutRunnable = Runnable {
+        if (isWaitingForAI) {
+            isWaitingForAI = false
+            ttsManager.speak("AI is taking too long. Please try again.")
+            broadcastState("IDLE")
+        }
+    }
+
+    // Receives AI_RESPONSE from MainActivity (which got it from Flutter)
+    private val aiResponseReceiver = object : android.content.BroadcastReceiver() {
+        /**
+         * Handles incoming AI response broadcasts and speaks the AI reply.
+         *
+         * If the service is waiting for an AI response, cancels the AI timeout, retrieves
+         * the "response" string from the intent (or uses a fallback message), updates the
+         * service state to "SPEAKING", speaks the text via the TTS manager, and then
+         * returns the service state to "IDLE". If the service is not waiting for AI, the
+         * broadcast is ignored.
+         */
+        override fun onReceive(context: android.content.Context?, intent: Intent?) {
+            if (!isWaitingForAI) return
+            isWaitingForAI = false
+            aiTimeoutHandler.removeCallbacks(aiTimeoutRunnable)
+            val response = intent?.getStringExtra("response") ?: "I couldn't get a response."
+            broadcastState("SPEAKING")
+            ttsManager.speak(response)
+            broadcastState("IDLE")
+        }
+    }
+
     // Gesture mode: "shake", "power", or "both" (default)
     private var gestureMode: String = "both"
     private val gestureModeReceiver = object : android.content.BroadcastReceiver() {
@@ -61,6 +95,13 @@ class AssistantForegroundService : Service() {
         }
     }
 
+    /**
+     * Initializes the foreground assistant service by creating required managers, detectors, and system integrations.
+     *
+     * Sets up notification channel, overlay, TTS and voice-recognition services, motion and power-button detectors,
+     * registers broadcast receivers for gesture mode, AI responses, and notification actions, and shows the floating
+     * microphone bubble used to trigger the assistant.
+     */
     override fun onCreate() {
         super.onCreate()
         Log.d("AuraAssistant", "Service Created")
@@ -119,6 +160,14 @@ class AssistantForegroundService : Service() {
         // Show the floating mic bubble (easy one-tap trigger)
         overlayManager.showFloatingBubble { triggerAssistant() }
 
+        // Listen for AI responses from Flutter via MainActivity
+        val aiResponseFilter = IntentFilter(ACTION_AI_RESPONSE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(aiResponseReceiver, aiResponseFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(aiResponseReceiver, aiResponseFilter)
+        }
+
         // Listen for notification action taps and cancel actions
         val actionFilter = IntentFilter().apply {
             addAction(ACTION_LISTEN_NOW)
@@ -131,9 +180,13 @@ class AssistantForegroundService : Service() {
         }
     }
 
-    /** Shared trigger for both shake and power-button activation */
+    /**
+     * Initiates the assistant listening flow from user gestures.
+     *
+     * If the service is currently waiting for a confirmation, contact selection, message content, or an AI response, this function does nothing. Otherwise it vibrates the device, updates the assistant state and overlay to "LISTENING", speaks "Listening", and starts voice recognition.
+     */
     private fun triggerAssistant() {
-        if (isWaitingForConfirmation || isWaitingForContactSelection || isWaitingForMessage) return
+        if (isWaitingForConfirmation || isWaitingForContactSelection || isWaitingForMessage || isWaitingForAI) return
         vibrate()
         broadcastState("LISTENING")
         overlayManager.showOverlay("LISTENING")
@@ -141,12 +194,19 @@ class AssistantForegroundService : Service() {
         voiceRecognitionService.startListening()
     }
 
+    /**
+     * Cancels any ongoing assistant activity, clears pending state, and returns the assistant to IDLE.
+     *
+     * Stops voice input and speech, resets waiting flags and pending command, cancels the AI timeout, and broadcasts the "IDLE" state.
+     */
     private fun cancelAssistant() {
         voiceRecognitionService.stopListening()
         ttsManager.stop()
         isWaitingForConfirmation = false
         isWaitingForMessage = false
         isWaitingForContactSelection = false
+        isWaitingForAI = false
+        aiTimeoutHandler.removeCallbacks(aiTimeoutRunnable)
         pendingCommand = null
         broadcastState("IDLE")
     }
@@ -203,6 +263,17 @@ class AssistantForegroundService : Service() {
         )
     }
 
+    /**
+     * Processes a piece of recognized speech and advances the assistant's conversational state.
+     *
+     * Handles ongoing flows (message entry, confirmation, contact selection), parses new commands,
+     * and dispatches actions such as sending SMS, calling contacts, performing web searches via AI,
+     * showing disambiguation UI, or delegating device control commands. Updates internal waiting flags,
+     * uses TTS to prompt or confirm with the user, starts voice recognition when awaiting further input,
+     * and broadcasts state changes via broadcastState.
+     *
+     * @param text The recognized speech text to handle.
+     */
     private fun handleRecognizedText(text: String) {
         if (isWaitingForMessage && pendingCommand != null) {
             if (pendingCommand is ParsedCommand.SendSms) {
@@ -278,6 +349,12 @@ class AssistantForegroundService : Service() {
                     }
                 }
             }
+            is ParsedCommand.WebSearch -> {
+                requestAIProcessing("search for: ${command.query}")
+            }
+            is ParsedCommand.Unknown -> {
+                requestAIProcessing(text)
+            }
             else -> {
                 deviceControlService.executeCommand(command, ttsManager)
                 broadcastState("IDLE")
@@ -285,6 +362,35 @@ class AssistantForegroundService : Service() {
         }
     }
 
+    /**
+     * Submits a text query to the AI processing pipeline and starts a 30-second AI response timeout.
+     *
+     * Sets the service into an AI-waiting state, updates the visible state to "PROCESSING", speaks a short
+     * acknowledgement, broadcasts an `ACTION_AI_REQUEST` intent with the query under the `"query"` extra,
+     * and schedules a 30-second timeout to recover if no AI response arrives.
+     *
+     * @param text The natural-language query to send to the AI subsystem.
+     */
+    private fun requestAIProcessing(text: String) {
+        isWaitingForAI = true
+        broadcastState("PROCESSING")
+        ttsManager.speak("Let me think about that.")
+
+        val intent = Intent(ACTION_AI_REQUEST)
+        intent.putExtra("query", text)
+        sendBroadcast(intent)
+
+        // 30-second timeout in case Flutter engine is not running
+        aiTimeoutHandler.postDelayed(aiTimeoutRunnable, 30_000L)
+    }
+
+    /**
+     * Executes the currently stored pending command, if any.
+     *
+     * If the pending command is a SendSms, sends the SMS to the stored contact with the stored message.
+     * If it's a CallContact and a resolved contact is available in pendingCallContacts, places the call by number for that contact; otherwise calls by the contact name.
+     * For any other command type, delegates execution to the DeviceControlService.
+     */
     private fun executePendingCommand() {
         pendingCommand?.let { cmd ->
             when (cmd) {
@@ -331,6 +437,11 @@ class AssistantForegroundService : Service() {
         }
     }
 
+    /**
+     * Releases resources and stops all assistant-related background activity when the service is destroyed.
+     *
+     * Cleans up detectors and managers (shake detector, voice recognition, TTS, overlays), unregisters broadcast receivers used by the service, and cancels any pending AI timeout callbacks.
+     */
     override fun onDestroy() {
         super.onDestroy()
         shakeDetector.stop()
@@ -341,8 +452,15 @@ class AssistantForegroundService : Service() {
         try { unregisterReceiver(powerButtonDetector) } catch (e: Exception) { }
         try { unregisterReceiver(gestureModeReceiver) } catch (e: Exception) { }
         try { unregisterReceiver(actionReceiver) } catch (e: Exception) { }
+        try { unregisterReceiver(aiResponseReceiver) } catch (e: Exception) { }
+        aiTimeoutHandler.removeCallbacks(aiTimeoutRunnable)
     }
 
+    /**
+     * Indicates that binding to this service is not supported.
+     *
+     * @return `null` since the service does not allow clients to bind to it.
+     */
     override fun onBind(intent: Intent?): IBinder? {
         return null
     }
