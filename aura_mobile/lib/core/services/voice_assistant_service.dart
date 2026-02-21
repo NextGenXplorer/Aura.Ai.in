@@ -5,8 +5,28 @@ import 'package:permission_handler/permission_handler.dart';
 class VoiceAssistantService {
   static const MethodChannel _channel = MethodChannel('com.aura.ai/app_control');
   static bool _isRunning = false;
+  static bool _hasSynced = false;
 
   static bool get isRunning => _isRunning;
+
+  /// Sync the in-memory flag with the actual Android service state.
+  /// Call this when the app starts or resumes to detect if the service
+  /// is still running after the app was cleared from recents.
+  static Future<void> syncServiceState() async {
+    try {
+      final bool running = await _channel.invokeMethod('isAssistantRunning');
+      _isRunning = running;
+      _hasSynced = true;
+      debugPrint("VoiceAssistant: Synced state -> $_isRunning");
+    } on PlatformException catch (e) {
+      debugPrint("VoiceAssistant: Failed to sync state: ${e.message}");
+    }
+  }
+
+  /// Ensures state is synced at least once. Safe to call multiple times.
+  static Future<void> ensureSynced() async {
+    if (!_hasSynced) await syncServiceState();
+  }
 
   static Future<bool> requestPermissions() async {
     Map<Permission, PermissionStatus> statuses = await [

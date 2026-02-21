@@ -10,13 +10,16 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.EventChannel
+import com.aura.mobile.aura_mobile.assistant.AssistantForegroundService
 
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.aura.ai/memory"
     private val APP_CONTROL_CHANNEL = "com.aura.ai/app_control"
     private val ASSISTANT_STATE_CHANNEL = "com.aura.ai/assistant_state"
+    private val ASSISTANT_AI_CHANNEL = "com.aura.ai/assistant_ai"
 
     private var assistantStateSink: EventChannel.EventSink? = null
+    private var assistantAiChannel: MethodChannel? = null
 
     private val assistantStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -67,7 +70,45 @@ class MainActivity: FlutterActivity() {
                 }
             }
         )
-        
+
+        // Assistant AI Channel — bridges native voice assistant to Flutter AI pipeline
+        assistantAiChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ASSISTANT_AI_CHANNEL)
+        assistantAiChannel!!.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "sendAIResponse" -> {
+                    // Legacy full response — treat as single chunk + complete
+                    val response = call.arguments as? String ?: ""
+                    AssistantForegroundService.onAiChunk?.invoke(response)
+                    AssistantForegroundService.onAiComplete?.invoke()
+                    result.success(null)
+                }
+                "sendAIChunk" -> {
+                    val chunk = call.arguments as? String ?: ""
+                    AssistantForegroundService.onAiChunk?.invoke(chunk)
+                    result.success(null)
+                }
+                "sendAIComplete" -> {
+                    AssistantForegroundService.onAiComplete?.invoke()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // Register as the AI request handler — direct call, no broadcasts
+        AssistantForegroundService.aiRequestHandler = { query ->
+            runOnUiThread {
+                assistantAiChannel?.invokeMethod("processAIQuery", query)
+            }
+        }
+
+        // If a query was pending (Flutter was dead when it arrived), forward it now
+        val pending = AssistantForegroundService.pendingAiQuery
+        if (pending != null) {
+            AssistantForegroundService.pendingAiQuery = null
+            assistantAiChannel?.invokeMethod("processAIQuery", pending)
+        }
+
         // Memory Channel
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             if (call.method == "getAvailableMemory") {
@@ -164,9 +205,11 @@ class MainActivity: FlutterActivity() {
                 "requestOverlayPermission" -> {
                     requestOverlayPermission(result)
                 }
+                "isAssistantRunning" -> {
+                    result.success(isServiceRunning(com.aura.mobile.aura_mobile.assistant.AssistantForegroundService::class.java))
+                }
                 "setGestureMode" -> {
                     val mode = call.argument<String>("mode") ?: "both"
-                    // Pass gesture mode to the running service via broadcast
                     val intent = android.content.Intent("com.aura.mobile.assistant.SET_GESTURE_MODE")
                     intent.putExtra("mode", mode)
                     sendBroadcast(intent)
@@ -197,7 +240,7 @@ class MainActivity: FlutterActivity() {
     private fun launchApp(appName: String, result: MethodChannel.Result) {
         val pm = packageManager
         val packages = pm.getInstalledPackages(0)
-        
+
         // Simple fuzzy match algorithm
         var bestMatchPkg: String? = null
         var bestMatchLabel: String? = null
@@ -264,12 +307,6 @@ class MainActivity: FlutterActivity() {
     }
 
     private fun dialContact(name: String?, result: MethodChannel.Result) {
-        // For simplicity in this step, we will just open the dialer with the name/number parsing handled by OS if it is a number
-        // Or if it is a name, we might search. Implementing searching Contacts requires READ_CONTACTS.
-        // Let's assume input might be a name or number.
-        // We will try to filter by name first if permission acts up, but basic intent is DIAL.
-        
-        // If it's a number, easy. If name, we need to query.
         if (name == null) {
              result.error("INVALID", "Name required", null)
              return
@@ -285,10 +322,6 @@ class MainActivity: FlutterActivity() {
         }
 
         // Try to find contact by name
-        // Requires READ_CONTACTS permission handling in MainActivity or assuming helper
-        // Since we are in MainActivity, we can try to query content resolver
-        // But for safety and code brevity in this generated file, let's try to query first.
-        
         try {
             val resolver = contentResolver
             val cursor = resolver.query(
@@ -298,7 +331,7 @@ class MainActivity: FlutterActivity() {
                 arrayOf("%$name%"),
                 null
             )
-            
+
             var number: String? = null
             if (cursor != null && cursor.moveToFirst()) {
                 val index = cursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER)
@@ -320,9 +353,6 @@ class MainActivity: FlutterActivity() {
             }
 
         } catch (e: Exception) {
-             // If permission denied or other error, fallback to dialer empty or log
-             // result.error("PERMISSION_ERROR", "Read Contacts Permission needed", null)
-             // Just open dialer
              val intent = android.content.Intent(android.content.Intent.ACTION_DIAL)
              startActivity(intent)
              result.success("Opened Dialer (Contact search failed or permission denied)")
@@ -334,7 +364,7 @@ class MainActivity: FlutterActivity() {
              result.error("INVALID", "Name/Number required", null)
              return
          }
-         
+
          // 1. Resolve number (reuse logic or duplication)
          var number = name
          if (!name.all { it.isDigit() || it == '+' || it == ' ' || it == '-' }) {
@@ -366,7 +396,7 @@ class MainActivity: FlutterActivity() {
              result.error("ERROR", e.message, null)
          }
     }
-    
+
     // Existing helper methods
     private fun getAvailableMemory(): Long {
         val memoryInfo = ActivityManager.MemoryInfo()
@@ -420,7 +450,7 @@ class MainActivity: FlutterActivity() {
                     break
                 }
             }
-            
+
             if (cameraId != null) {
                 cameraManager.setTorchMode(cameraId, state)
                 result.success("Torch toggled to $state")
@@ -430,5 +460,22 @@ class MainActivity: FlutterActivity() {
         } catch (e: Exception) {
             result.error("TORCH_ERROR", e.message, null)
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun isServiceRunning(serviceClass: Class<*>): Boolean {
+        val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        for (service in manager.getRunningServices(Int.MAX_VALUE)) {
+            if (serviceClass.name == service.service.className) {
+                return true
+            }
+        }
+        return false
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Clear handler to prevent stale refs to dead Flutter engine
+        AssistantForegroundService.aiRequestHandler = null
     }
 }

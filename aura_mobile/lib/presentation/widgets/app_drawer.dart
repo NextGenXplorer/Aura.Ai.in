@@ -16,9 +16,6 @@ class AppDrawer extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final userState = ref.watch(userProvider);
-    final chatState = ref.watch(chatProvider);
-    
-    // Mock History (replace with real history later)
 
     return Drawer(
       backgroundColor: const Color(0xFF1a1a20), // Dark Obsidian
@@ -144,9 +141,13 @@ class AppDrawer extends ConsumerWidget {
 
             const Divider(color: Colors.white10),
 
-            // 4. Voice Assistant Toggle
+            // 4. Voice Assistant Toggle — syncs with actual Android service state
             StatefulBuilder(
               builder: (context, setState) {
+                // Sync on first build to detect service still running after app restart
+                VoiceAssistantService.ensureSynced().then((_) {
+                  if (context.mounted) setState(() {});
+                });
                 return SwitchListTile(
                   secondary: const Icon(Icons.record_voice_over, color: Color(0xFFc69c3a)),
                   title: Text("Voice Assistant", style: GoogleFonts.outfit(color: Colors.white)),
