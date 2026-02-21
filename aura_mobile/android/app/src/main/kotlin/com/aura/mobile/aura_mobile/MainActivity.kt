@@ -197,9 +197,11 @@ class MainActivity: FlutterActivity() {
                 "requestOverlayPermission" -> {
                     requestOverlayPermission(result)
                 }
+                "isAssistantRunning" -> {
+                    result.success(isServiceRunning(com.aura.mobile.aura_mobile.assistant.AssistantForegroundService::class.java))
+                }
                 "setGestureMode" -> {
                     val mode = call.argument<String>("mode") ?: "both"
-                    // Pass gesture mode to the running service via broadcast
                     val intent = android.content.Intent("com.aura.mobile.assistant.SET_GESTURE_MODE")
                     intent.putExtra("mode", mode)
                     sendBroadcast(intent)
@@ -463,6 +465,17 @@ class MainActivity: FlutterActivity() {
         } catch (e: Exception) {
             result.error("TORCH_ERROR", e.message, null)
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun isServiceRunning(serviceClass: Class<*>): Boolean {
+        val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        for (service in manager.getRunningServices(Int.MAX_VALUE)) {
+            if (serviceClass.name == service.service.className) {
+                return true
+            }
+        }
+        return false
     }
 
     override fun onDestroy() {
