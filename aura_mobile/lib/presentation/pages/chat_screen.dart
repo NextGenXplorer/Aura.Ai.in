@@ -8,6 +8,7 @@ import 'package:aura_mobile/presentation/widgets/greeting_widget.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter/services.dart';
 import 'package:aura_mobile/presentation/widgets/code_element_builder.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
@@ -22,6 +23,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _showCommandMenu = false;
   bool _isWebSearchMode = false;
+  static const MethodChannel _assistantChannel = MethodChannel('com.aura.ai/assistant_ai');
+  // Tracks which email draft is in edit mode: key = message index, value = TextEditingController
+  final Map<int, TextEditingController> _emailEditControllers = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _assistantChannel.setMethodCallHandler((call) async {
+      // Native voice-initiated email drafts are now handled by the orchestrator
+      // via the emailDraft intent — no Flutter-side pending state required.
+    });
+  }
 
 
   void _scrollToBottom() {
@@ -37,6 +50,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final chatState = ref.watch(chatProvider);
+    final isModelLoading = chatState.isModelLoading;
+
+    // Filter out internal system messages like 'drafting_email_to:...'
+    final visibleMessages = chatState.messages.where((m) {
+       return !(m['role'] == 'system' && m['content']!.startsWith('drafting_email_to:'));
+    }).toList();
 
     // Scroll to bottom when new messages arrive
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
@@ -58,7 +77,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     });
     final modelState = ref.watch(modelSelectorProvider);
-    final isModelLoading = chatState.isModelLoading || modelState.activeModelId == null;
+    // final isModelLoading = chatState.isModelLoading || modelState.activeModelId == null; // Redundant, already defined above
 
     return Scaffold(
       backgroundColor: const Color(0xFF0a0a0c), // Obsidian - Keep opaque for normal app use
@@ -152,7 +171,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         icon: const Icon(Icons.add, color: Colors.white70, size: 20),
                         tooltip: "New Chat",
                         onPressed: () {
-                          // Clear chat history
                           ref.read(chatProvider.notifier).clearChat();
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(content: Text("New chat started"), duration: Duration(seconds: 1)),
@@ -185,7 +203,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               children: [
                  // 1. Chat Content or Welcome Message
                  Positioned.fill(
-                   child: chatState.messages.isEmpty
+                   child: visibleMessages.isEmpty
                     ? Center(
                         child: SingleChildScrollView(
                           child: Padding(
@@ -203,20 +221,62 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     : ListView.builder(
                         controller: _scrollController,
                         padding: const EdgeInsets.fromLTRB(16, 100, 16, 80), // Top padding for AppBar
-                        itemCount: chatState.messages.length,
+                        itemCount: visibleMessages.length,
                         itemBuilder: (context, index) {
-                          final msg = chatState.messages[index];
-                          final isUser = msg['role'] == 'user';
-                          final content = msg['content'] ?? '';
+                          final message = visibleMessages[index];
+                          final isUser = message['role'] == 'user';
                           
-                          // Parse Options
-                          String displayContent = content;
+                          // Parse options if present (mostly for old legacy code paths)
                           List<Map<String, String>> options = [];
+                          String displayContent = message['content'] ?? '';
+                          
+                          // Parse email draft
+                          String? draftAddress;
+                          String? parsedSubject;
+                          String? parsedBody;
+                          bool isEmailDraft = false;
+                          
+                          if (!isUser) {
+                             // Find the last known drafted address before this message in the raw list
+                             final rawIndex = chatState.messages.indexOf(message);
+                             if (rawIndex > 0) {
+                                 for (int i = rawIndex - 1; i >= 0; i--) {
+                                    final m = chatState.messages[i];
+                                    if (m['role'] == 'system' && m['content']!.startsWith('drafting_email_to:')) {
+                                        draftAddress = m['content']!.replaceFirst('drafting_email_to:', '');
+                                        break;
+                                    } else if (m['role'] == 'user') {
+                                        // Stop searching if we hit another user message
+                                        break;
+                                    }
+                                 }
+                             }
+
+                             if (draftAddress != null && displayContent.contains("Subject:")) {
+                                 // Parse Subject: line
+                                 final subjectMatch = RegExp(r"Subject:\s*(.+?)(?:\n|$)").firstMatch(displayContent);
+                                 if (subjectMatch != null) parsedSubject = subjectMatch.group(1)?.trim();
+
+                                 // Parse body: everything after the Subject line
+                                 // Handles both "Body: ..." format and the new "\n\n[body]" format
+                                 final afterSubject = displayContent.substring(
+                                   (subjectMatch?.end ?? 0),
+                                 ).trim();
+                                 // Remove "Body:" prefix if present (legacy format)
+                                 parsedBody = afterSubject.replaceFirst(RegExp(r'^Body:\s*', caseSensitive: false), '').trim();
+
+                                 if (parsedSubject != null || parsedBody!.isNotEmpty) {
+                                     isEmailDraft = true;
+                                     // Blank out the main bubble content — the card shows everything
+                                     displayContent = '';
+                                 }
+                             }
+                           }
                           
                           final optionsRegex = RegExp(r'\[\[OPTIONS:(.*?)\]\]');
-                          final match = optionsRegex.firstMatch(content);
+                          final match = optionsRegex.firstMatch(displayContent);
                           if (match != null) {
-                            displayContent = content.substring(0, match.start).trim();
+                            displayContent = displayContent.substring(0, match.start).trim();
                             final optionsStr = match.group(1) ?? "";
                             options = optionsStr.split(',').map((e) {
                               final parts = e.split('|');
@@ -227,7 +287,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             }).toList();
                           }
 
-                          return Align(
+                           return Align(
                             alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
                             child: Column(
                               crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
@@ -299,6 +359,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                         );
                                       }).toList(),
                                     ),
+                                  ),
+
+                                  // ✉️ EMAIL DRAFT CARD
+                                  if (isEmailDraft) _buildEmailDraftCard(
+                                    msgIndex: index,
+                                    address: draftAddress!,
+                                    subject: parsedSubject,
+                                    body: parsedBody,
                                   ),
                               ],
                             ),
@@ -468,16 +536,214 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
+  /// Builds the email draft card with Edit + Send buttons.
+  Widget _buildEmailDraftCard({
+    required int msgIndex,
+    required String address,
+    String? subject,
+    String? body,
+  }) {
+    return StatefulBuilder(
+      builder: (context, setCardState) {
+        final isEditing = _emailEditControllers.containsKey(msgIndex);
+        final editController = _emailEditControllers[msgIndex];
+
+        return Container(
+          margin: const EdgeInsets.only(top: 12, bottom: 4),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF1a1a22), Color(0xFF141418)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFc69c3a).withOpacity(0.4)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFc69c3a).withOpacity(0.12),
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.email_outlined, color: Color(0xFFc69c3a), size: 18),
+                    const SizedBox(width: 8),
+                    Text('Email Draft', style: GoogleFonts.outfit(
+                      color: const Color(0xFFc69c3a),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    )),
+                  ],
+                ),
+              ),
+              // Fields
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _emailField(label: 'To', value: address),
+                    const SizedBox(height: 8),
+                    _emailField(label: 'Subject', value: subject ?? ''),
+                    const SizedBox(height: 8),
+                    Text('Body', style: GoogleFonts.outfit(
+                      color: Colors.white38,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    )),
+                    const SizedBox(height: 4),
+                    isEditing
+                      ? TextField(
+                          controller: editController,
+                          maxLines: null,
+                          style: GoogleFonts.outfit(color: Colors.white, fontSize: 14, height: 1.6),
+                          decoration: InputDecoration(
+                            filled: true,
+                            fillColor: const Color(0xFF2a2a35),
+                            contentPadding: const EdgeInsets.all(12),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: Color(0xFFc69c3a), width: 1),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: Color(0xFFc69c3a), width: 1.5),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: BorderSide(color: Colors.white.withOpacity(0.15)),
+                            ),
+                          ),
+                        )
+                      : Text(
+                          body ?? '',
+                          style: GoogleFonts.outfit(color: Colors.white70, fontSize: 14, height: 1.6),
+                        ),
+                  ],
+                ),
+              ),
+              // Action Buttons
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                child: Row(
+                  children: [
+                    // Edit / Done Editing button
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        icon: Icon(
+                          isEditing ? Icons.check_circle_outline : Icons.edit_outlined,
+                          size: 16,
+                          color: Colors.white70,
+                        ),
+                        label: Text(
+                          isEditing ? 'Done Editing' : 'Edit Email',
+                          style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                        ),
+                        onPressed: () {
+                          setCardState(() {
+                            if (isEditing) {
+                              _emailEditControllers.remove(msgIndex);
+                            } else {
+                              _emailEditControllers[msgIndex] =
+                                  TextEditingController(text: body ?? '');
+                            }
+                          });
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    // Send Email button
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.send, size: 16, color: Colors.black),
+                        label: Text(
+                          'Send Email',
+                          style: GoogleFonts.outfit(
+                            color: Colors.black,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFc69c3a),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                        ),
+                        onPressed: () async {
+                          final finalBody = (isEditing
+                                  ? (editController?.text ?? body ?? '')
+                                  : body ?? '')
+                              .replaceAll('[Your Name]', 'Aura User');
+                          try {
+                            const channel = MethodChannel('com.aura.ai/app_control');
+                            await channel.invokeMethod('launchEmailApp', {
+                              'address': address,
+                              'subject': subject ?? '',
+                              'body': finalBody,
+                            });
+                          } catch (e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Could not launch email client: $e')),
+                              );
+                            }
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _emailField({required String label, required String value}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: GoogleFonts.outfit(
+          color: Colors.white38,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        )),
+        const SizedBox(height: 2),
+        Text(value, style: GoogleFonts.outfit(color: Colors.white, fontSize: 14)),
+      ],
+    );
+  }
+
   void _sendMessage(String text) {
-     if (text.trim().isNotEmpty) {
-      final messageToSend = _isWebSearchMode ? "[SEARCH] $text" : text;
+    if (text.trim().isNotEmpty) {
+      // All email intent detection is handled by the orchestrator's emailDraft intent.
+      // No email hacks needed here — just pass the message through normally.
+      final messageToSend = _isWebSearchMode ? '[SEARCH] $text' : text;
       ref.read(chatProvider.notifier).sendMessage(messageToSend);
       _controller.clear();
       setState(() {
         _isWebSearchMode = false;
-         // Toggle menu off
       });
     }
+  }
+
+  String? _encodeQueryParameters(Map<String, String> params) {
+    return params.entries
+        .map((MapEntry<String, String> e) =>
+            '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}')
+        .join('&');
   }
 
 }

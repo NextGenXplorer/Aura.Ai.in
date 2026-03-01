@@ -12,7 +12,8 @@ import android.speech.SpeechRecognizer
 class VoiceRecognitionService(
     private val context: Context,
     private val onResult: (String) -> Unit,
-    private val onError: (String) -> Unit
+    private val onError: (String) -> Unit,
+    private val onTimeout: () -> Unit
 ) {
 
     private var speechRecognizer: SpeechRecognizer? = null
@@ -56,7 +57,11 @@ class VoiceRecognitionService(
                         SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Speech timeout"
                         else -> "Unknown error"
                     }
-                    onError(errorMessage)
+                    if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                        onTimeout()
+                    } else {
+                        onError(errorMessage)
+                    }
                 }
 
                 override fun onResults(results: Bundle?) {

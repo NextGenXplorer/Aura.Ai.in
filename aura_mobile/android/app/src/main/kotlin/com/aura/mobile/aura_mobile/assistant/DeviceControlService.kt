@@ -77,6 +77,9 @@ class DeviceControlService(private val context: Context) {
             is ParsedCommand.SendSms -> {
                 // Should only be called if properly confirmed. AssistantForegroundService will handle confirmation logic.
             }
+            is ParsedCommand.SendEmail -> {
+                // Handled in handleRecognizedText directly via requestEmailDraft
+            }
             is ParsedCommand.TurnTorch -> turnTorch(command.state, ttsManager)
             is ParsedCommand.SetTimer -> setTimer(command.minutes, ttsManager)
             is ParsedCommand.SetAlarm -> setAlarm(command.hour, command.minute, ttsManager)
@@ -284,7 +287,11 @@ class DeviceControlService(private val context: Context) {
                 putExtra(android.app.SearchManager.QUERY, query)
             }
             context.startActivity(intent)
-            ttsManager?.speak("Searching Google for $query")
+            
+            // Clean up the query for TTS so it doesn't say "magnifying glass" or emojis
+            val cleanQuery = query.replace(Regex("[\\x{1F300}-\\x{1F6FF}|\\x{1F900}-\\x{1F9FF}|\\x{2600}-\\x{26FF}|\\x{2700}-\\x{27BF}]", RegexOption.IGNORE_CASE), "").trim()
+            
+            ttsManager?.speak("Searching Google for $cleanQuery")
         } catch (e: Exception) {
             ttsManager?.speak("Could not open web search")
         }
@@ -292,11 +299,12 @@ class DeviceControlService(private val context: Context) {
 
     private fun searchYouTube(query: String, ttsManager: TtsManager?) {
         try {
-            // Using ACTION_VIEW with youtube search URI often forces the app to open and sometimes auto-play the top result 
-            // depending on the YouTube app version. 
-            val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.youtube.com/results?search_query=$query"))
-            intent.setPackage("com.google.android.youtube")
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val intent = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
+                putExtra(android.app.SearchManager.QUERY, query)
+                setPackage("com.google.android.youtube")
+            }
             context.startActivity(intent)
             ttsManager?.speak("Playing $query on YouTube")
         } catch (e: Exception) {

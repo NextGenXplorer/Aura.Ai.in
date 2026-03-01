@@ -35,6 +35,12 @@ class AssistantForegroundService : Service() {
 
         /** Stores an AI query when Flutter is dead; MainActivity picks it up on launch. */
         var pendingAiQuery: String? = null
+
+        /** Set by MainActivity when Flutter engine is alive for email drafting. */
+        var startEmailDraftHandler: ((address: String) -> Unit)? = null
+
+        /** Stores an email address when Flutter is dead; MainActivity picks it up on launch. */
+        var pendingEmailDraftAddress: String? = null
     }
 
     // Receives the notification action button tap and cancel actions
@@ -97,15 +103,46 @@ class AssistantForegroundService : Service() {
             Log.d("AuraAssistant", "TTS Initialized")
         }
 
+        var retryCount = 0
+
         voiceRecognitionService = VoiceRecognitionService(this,
             onResult = { text ->
                 Log.d("AuraAssistant", "Recognized: $text")
+                retryCount = 0
                 handleRecognizedText(text)
             },
             onError = { error ->
                 Log.e("AuraAssistant", "Voice Error: $error")
-                if (error != "Speech timeout" && error != "No match") {
-                    ttsManager.speak("Sorry, I didn't catch that.")
+                if (retryCount < 1) {
+                    retryCount++
+                    val phrases = listOf("Can you please repeat?", "Could you come again?", "I didn't quite catch that, can you repeat?")
+                    ttsManager.speak(phrases.random())
+                    ttsManager.onAllSpoken {
+                        if (currentState != "IDLE") {
+                            broadcastState("LISTENING")
+                            voiceRecognitionService.startListening()
+                        }
+                    }
+                } else {
+                    cancelAssistant()
+                    retryCount = 0
+                }
+            },
+            onTimeout = {
+                Log.d("AuraAssistant", "Speech timeout/No Match detected.")
+                if (retryCount < 1) {
+                    retryCount++
+                    val phrases = listOf("Can you please repeat?", "Could you come again?", "I didn't hear anything, please repeat.")
+                    ttsManager.speak(phrases.random())
+                    ttsManager.onAllSpoken {
+                        if (currentState != "IDLE") {
+                            broadcastState("LISTENING")
+                            voiceRecognitionService.startListening()
+                        }
+                    }
+                } else {
+                    cancelAssistant()
+                    retryCount = 0
                 }
             }
         )
@@ -155,9 +192,10 @@ class AssistantForegroundService : Service() {
         onAiComplete = {
             isWaitingForAI = false
             aiTimeoutHandler.removeCallbacks(aiTimeoutRunnable)
-            // Overlay only hides after TTS finishes speaking all queued chunks
+            // Overlay stays open and assistant automatically listens for follow-up questions
             ttsManager.onAllSpoken {
-                broadcastState("IDLE")
+                broadcastState("LISTENING")
+                voiceRecognitionService.startListening()
             }
         }
 
@@ -196,6 +234,10 @@ class AssistantForegroundService : Service() {
     }
 
     private fun broadcastState(state: String) {
+        if (state == "IDLE") {
+            // Forcefully cut off TTS if UI is dismissed
+            ttsManager.stop()
+        }
         currentState = state
         overlayManager.updateState(state) // Update native overlay
         val intent = Intent("com.aura.mobile.assistant.STATE_CHANGE")
@@ -325,6 +367,9 @@ class AssistantForegroundService : Service() {
             is ParsedCommand.WebSearch -> {
                 requestAIProcessing("search for: ${command.query}")
             }
+            is ParsedCommand.SendEmail -> {
+                requestEmailDraft(command.address)
+            }
             is ParsedCommand.Unknown -> {
                 requestAIProcessing(text)
             }
@@ -355,6 +400,24 @@ class AssistantForegroundService : Service() {
 
         // Timeout in case Flutter engine never responds
         aiTimeoutHandler.postDelayed(aiTimeoutRunnable, AI_TIMEOUT_MS)
+    }
+
+    private fun requestEmailDraft(address: String) {
+        broadcastState("PROCESSING")
+        ttsManager.speak("What should the email to $address be about?")
+
+        // Direct call if Flutter engine is alive, otherwise launch MainActivity
+        val handler = startEmailDraftHandler
+        if (handler != null) {
+            handler(address)
+        } else {
+            // Flutter engine is dead — store address and launch activity
+            pendingEmailDraftAddress = address
+            val launchIntent = Intent(this, com.aura.mobile.aura_mobile.MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(launchIntent)
+        }
     }
 
     private fun executePendingCommand() {

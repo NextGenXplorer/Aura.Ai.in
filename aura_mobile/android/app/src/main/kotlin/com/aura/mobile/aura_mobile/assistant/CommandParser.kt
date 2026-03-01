@@ -4,6 +4,7 @@ sealed class ParsedCommand {
     data class OpenApp(val appName: String) : ParsedCommand()
     data class CallContact(val contactName: String) : ParsedCommand()
     data class SendSms(val contactName: String, val message: String) : ParsedCommand()
+    data class SendEmail(val address: String) : ParsedCommand()
     data class TurnTorch(val state: Boolean) : ParsedCommand()
     data class SetTimer(val minutes: Int) : ParsedCommand()
     data class SetAlarm(val hour: Int, val minute: Int) : ParsedCommand()
@@ -30,7 +31,7 @@ object CommandParser {
             "can you ", "could you ", "please ", "for me", "hey aura ", "aura ",
             "just ", "quickly ", "i want to ", "i need to ", "i'd like to ",
             "i would like to ", "go ahead and ", "would you ", "will you ",
-            "kindly ", "hey ", "yo "
+            "kindly ", "hey ", "yo ", "help me "
         )
         for (filler in fillers) {
             text = text.replace(filler, "")
@@ -38,192 +39,152 @@ object CommandParser {
         text = text.trim()
 
         // YouTube Search / Play
-        if (text.contains("on youtube") || text.contains("in youtube") || text.startsWith("play ") || text.startsWith("youtube ")) {
-            var query = text.replace("play ", "")
-                .replace("on youtube", "")
-                .replace("in youtube", "")
-                .replace("open ", "")
-                .replace("search for ", "")
-                .replace("youtube ", "")
-                .trim()
-            if (query.isNotEmpty() && (text.contains("youtube") || text.startsWith("play "))) {
+        val youtubeRegex = Regex("^(play|search|look for|find|put on)\\s+(.+?)\\s+(on|in)\\s+youtube$|^(play|search|look for|find|put on)\\s+youtube\\s+(for|with)?\\s*(.+)$|youtube\\s+(play|search|for)\\s+(.+)")
+        val ytMatch = youtubeRegex.find(text)
+        if (ytMatch != null) {
+            val query = ytMatch.groupValues.drop(1).find { it.isNotBlank() && it != "play" && it != "search" && it != "look for" && it != "find" && it != "put on" && it != "on" && it != "in" && it != "for" && it != "with" }?.trim()
+            if (!query.isNullOrEmpty()) {
                 return ParsedCommand.PlayYouTube(query)
             }
         }
+        if (text.startsWith("youtube ")) {
+            val query = text.removePrefix("youtube ").trim()
+            if (query.isNotEmpty()) return ParsedCommand.PlayYouTube(query)
+        }
 
-        // Open App (expanded: fire up, pull up, bring up, load)
-        val openPrefixes = listOf("open ", "launch ", "start ", "fire up ", "pull up ", "bring up ", "load ")
-        val matchedOpenPrefix = openPrefixes.firstOrNull { text.startsWith(it) }
-        if (matchedOpenPrefix != null &&
-            !text.contains("camera") && !text.contains("settings") && !text.contains("wifi") && !text.contains("bluetooth")) {
-            val appName = text.removePrefix(matchedOpenPrefix).trim()
-            if (appName.isNotEmpty()) {
-                // Check for compound "open youtube and play/search X" pattern
-                val compoundPlayRegex = Regex("^youtube\\s+and\\s+(play|search|search for)\\s+(.+)", RegexOption.IGNORE_CASE)
-                val compoundMatch = compoundPlayRegex.find(appName)
-                if (compoundMatch != null) {
-                    val query = compoundMatch.groupValues[2].trim()
-                    if (query.isNotEmpty()) return ParsedCommand.PlayYouTube(query)
+        // Call Contact (robust regex)
+        // Matches: call mom, dial dad, phone john, ring up sarah, give alex a ring, make a call to peter
+        val callRegex = Regex("^(call|dial|phone|ring|ring up|make a call to|give)\\s+(.+?)(?:\\s+a\\s+(call|ring|buzz))?$")
+        val callMatch = callRegex.find(text)
+        if (callMatch != null) {
+            val contactName = callMatch.groupValues[2].trim()
+            if (contactName.isNotEmpty() && contactName != "me" && contactName != "it") {
+                return ParsedCommand.CallContact(contactName)
+            }
+        }
+
+        // Send SMS/Text (robust regex)
+        // Matches: text mom hi, send message to dad saying hello, message john, drop a text to sarah that i am late
+        val smsRegex = Regex("^(text|message|sms|send a message to|send message to|send a text to|send text to|send an sms to|shoot a message to|drop a text to)\\s+(.+?)(?:\\s+(saying|that|with message|as)\\s+(.+))?$")
+        val smsMatch = smsRegex.find(text)
+        if (smsMatch != null) {
+            val verb = smsMatch.groupValues[1]
+            var contactName = smsMatch.groupValues[2].trim()
+            var message = smsMatch.groupValues[4].trim()
+
+            // Handle case where "text mom hi" puts "mom hi" into group 2
+            if (message.isEmpty() && (verb == "text" || verb == "message" || verb == "sms")) {
+                val parts = contactName.split(Regex("\\s+"), limit = 2)
+                if (parts.size == 2) {
+                     val potentialName = parts[0]
+                     // Basic check if the first part is likely a name/number
+                     contactName = potentialName
+                     message = parts[1]
                 }
+            }
+            if (contactName.isNotEmpty()) {
+                // Cleanup "to" if it slipped in (e.g., "message to mom")
+                if (contactName.startsWith("to ")) contactName = contactName.removePrefix("to ").trim()
+                return ParsedCommand.SendSms(contactName, message)
+            }
+        }
+
+        // Email Draft (robust regex)
+        // Matches: email john at gmail dot com, send an email to peter, mail, gmail
+        val emailRegex = Regex("^(email|send an email to|send email to|mail|gmail|send a mail to|draft an email to|compose an email to)\\s+(.+)$")
+        val emailMatch = emailRegex.find(text)
+        if (emailMatch != null) {
+            var rawAddress = emailMatch.groupValues[2].trim()
+            if (rawAddress.isNotEmpty()) {
+                // Convert common conversational phonetics into valid email formats
+                rawAddress = rawAddress.replace(" at ", "@")
+                    .replace(" dot ", ".")
+                    .replace(" ", "")
+                return ParsedCommand.SendEmail(rawAddress)
+            }
+        }
+
+        // Open App (robust regex)
+        // Matches: open whatsapp, launch spotify, start Netflix, pull up chrome
+        val openRegex = Regex("^(open|launch|start|fire up|pull up|bring up|load|run)\\s+(.+?)(?:\\s+app|\\s+application)?$")
+        val openMatch = openRegex.find(text)
+        if (openMatch != null && !text.contains("camera") && !text.contains("settings") && !text.contains("wifi") && !text.contains("bluetooth")) {
+            val appName = openMatch.groupValues[2].trim()
+            if (appName.isNotEmpty()) {
                 return ParsedCommand.OpenApp(appName)
             }
         }
 
-        // Call Contact (expanded: ring up, phone, buzz, give X a call/ring)
-        val callPrefixes = listOf("call ", "dial ", "ring up ", "phone ", "buzz ")
-        val matchedCallPrefix = callPrefixes.firstOrNull { text.startsWith(it) }
-        if (matchedCallPrefix != null) {
-            val contactName = text.removePrefix(matchedCallPrefix).trim()
-            if (contactName.isNotEmpty()) return ParsedCommand.CallContact(contactName)
-        }
-        // "give X a call/ring/buzz" pattern
-        val giveCallRegex = Regex("^give\\s+(.+?)\\s+a\\s+(call|ring|buzz)")
-        val giveCallMatch = giveCallRegex.find(text)
-        if (giveCallMatch != null) {
-            val contactName = giveCallMatch.groupValues[1].trim()
-            if (contactName.isNotEmpty()) return ParsedCommand.CallContact(contactName)
-        }
-
-        // Send SMS (expanded: drop a text/message to, shoot a message to)
-        // Format 1: "send message to [name] saying/as [message]"
-        if (text.startsWith("send message to ") || text.startsWith("send sms to ") || text.startsWith("send text to ")) {
-            val prefixes = listOf("send message to ", "send sms to ", "send text to ")
-            val prefix = prefixes.first { text.startsWith(it) }
-            val remainder = text.removePrefix(prefix).trim()
-            // Split on "saying" or "as" separator
-            val separatorRegex = Regex("\\s+(saying|as)\\s+")
-            val splitMatch = separatorRegex.find(remainder)
-            if (splitMatch != null) {
-                val name = remainder.substring(0, splitMatch.range.first).trim()
-                val msg = remainder.substring(splitMatch.range.last + 1).trim()
-                return ParsedCommand.SendSms(name, msg)
-            }
-            if (remainder.isNotEmpty()) {
-                return ParsedCommand.SendSms(remainder, "")
-            }
-        }
-
-        // Format 1b: "drop a text/message to [name]", "shoot a message to [name]"
-        val dropSmsRegex = Regex("^(drop a (text|line|message)|shoot a (message|text))\\s+to\\s+(.+)")
-        val dropSmsMatch = dropSmsRegex.find(text)
-        if (dropSmsMatch != null) {
-            val afterTo = dropSmsMatch.groupValues[4].trim()
-            val sepRegex = Regex("\\s+(saying|as)\\s+")
-            val sepMatch = sepRegex.find(afterTo)
-            if (sepMatch != null) {
-                val name = afterTo.substring(0, sepMatch.range.first).trim()
-                val msg = afterTo.substring(sepMatch.range.last + 1).trim()
-                return ParsedCommand.SendSms(name, msg)
-            }
-            if (afterTo.isNotEmpty()) return ParsedCommand.SendSms(afterTo, "")
-        }
-
-        // Format 2: "text [name] [message]" — with phone-number-aware parsing
-        if (text.startsWith("text ")) {
-            val remainder = text.removePrefix("text ").trim()
-            val tokens = remainder.split(Regex("\\s+"))
-            if (tokens.isNotEmpty()) {
-                val hasLetters = { s: String -> s.any { it.isLetter() } }
-                if (hasLetters(tokens.first())) {
-                    // Name token (e.g. "text appu as hai" or "text john hello")
-                    val name = tokens.first()
-                    var msg = remainder.substring(name.length).trim()
-                    // Strip "as" / "saying" separator from message start
-                    val separatorRegex = Regex("^(as|saying)\\s+", RegexOption.IGNORE_CASE)
-                    msg = msg.replace(separatorRegex, "")
-                    if (name.isNotEmpty()) return ParsedCommand.SendSms(name, msg)
-                } else {
-                    // Phone number with possible spaces (e.g. "text 98445 56496 hello")
-                    val phoneParts = mutableListOf<String>()
-                    var digitCount = 0
-                    val maxDigits = if (tokens.first().startsWith("+")) 14 else 10
-                    var processedCount = 0
-                    for (token in tokens) {
-                        if (hasLetters(token) || digitCount >= maxDigits) break
-                        phoneParts.add(token)
-                        digitCount += token.count { it.isDigit() }
-                        processedCount++
-                    }
-                    if (phoneParts.isNotEmpty()) {
-                        val name = phoneParts.joinToString(" ")
-                        val msg = tokens.drop(processedCount).joinToString(" ")
-                        return ParsedCommand.SendSms(name, msg)
-                    }
-                }
-            }
-        }
-
-        // Torch Control (expanded: turn the light on/off, light up, lights on/off)
-        if (text.contains("turn on torch") || text.contains("flashlight on") || text.contains("torch on") ||
-            text.contains("turn the light on") || text.contains("light up my phone") || text.contains("lights on")) {
+        // Torch Control
+        val turnOnTorchRegex = Regex("\\b(turn on|enable|switch on|start)\\b.*\\b(torch|flashlight|light|flash)\\b|\\b(torch|flashlight|light|flash)\\b.*\\b(on)\\b|light up (my )?(phone|path|way)|let there be light")
+        if (turnOnTorchRegex.containsMatchIn(text)) {
             return ParsedCommand.TurnTorch(true)
         }
-        if (text.contains("turn off torch") || text.contains("flashlight off") || text.contains("torch off") ||
-            text.contains("turn the light off") || text.contains("lights off")) {
+        val turnOffTorchRegex = Regex("\\b(turn off|disable|switch off|stop|kill)\\b.*\\b(torch|flashlight|light|flash)\\b|\\b(torch|flashlight|light|flash)\\b.*\\b(off)\\b|darkness")
+        if (turnOffTorchRegex.containsMatchIn(text)) {
             return ParsedCommand.TurnTorch(false)
         }
 
         // Time & Date
-        if (text.contains("what time is it") || text == "time") {
-            return ParsedCommand.GetTime
-        }
-        if (text.contains("what is today") || text.contains("today's date") || text == "date") {
-            return ParsedCommand.GetDate
-        }
+        val timeRegex = Regex("\\b(time|what time|current time|clock)\\b")
+        if (timeRegex.containsMatchIn(text) && !text.contains("timer")) return ParsedCommand.GetTime
+        
+        val dateRegex = Regex("\\b(date|what day|today's date|current date|what is today)\\b")
+        if (dateRegex.containsMatchIn(text)) return ParsedCommand.GetDate
 
         // Battery
-        if (text.contains("battery") || text.contains("how much juice")) {
-            return ParsedCommand.GetBattery
-        }
+        val batteryRegex = Regex("\\b(battery|juice|power left|charge)\\b")
+        if (batteryRegex.containsMatchIn(text)) return ParsedCommand.GetBattery
 
         // Volume
-        if (text.contains("max volume") || text.contains("volume to max") || text.contains("turn it up")) {
-            return ParsedCommand.MaxVolume
-        }
-        if (text.contains("mute") || text.contains("silence my phone")) {
-            return ParsedCommand.MuteVolume
-        }
+        val maxVolRegex = Regex("\\b(max volume|volume to max|turn it up|maximum volume|loudest)\\b")
+        if (maxVolRegex.containsMatchIn(text)) return ParsedCommand.MaxVolume
+        
+        val muteRegex = Regex("\\b(mute|silence|quiet|no sound|turn volume off)\\b")
+        if (muteRegex.containsMatchIn(text)) return ParsedCommand.MuteVolume
 
-        // Timers & Alarms (Basic regex parsing)
-        if (text.contains("timer for")) {
-            val words = text.split(" ")
-            for (i in words.indices) {
-                if (words[i] == "timer" || words[i] == "for") {
-                    val num = words.getOrNull(i + 1)?.toIntOrNull()
-                        ?: words.getOrNull(i + 2)?.toIntOrNull()
-                    if (num != null) {
-                        return ParsedCommand.SetTimer(num)
-                    }
-                }
-            }
+        // Timers & Alarms
+        val timerRegex = Regex("\\b(timer|countdown)\\b.*?(\\d+)\\s*(min|minute|sec|second|hour|hr)")
+        val timerMatch = timerRegex.find(text)
+        if (timerMatch != null) {
+             val amount = timerMatch.groupValues[2].toIntOrNull()
+             val unit = timerMatch.groupValues[3]
+             if (amount != null) {
+                 // Convert to minutes for basic handler
+                 val minutes = when {
+                     unit.startsWith("hour") || unit.startsWith("hr") -> amount * 60
+                     unit.startsWith("sec") -> if (amount >= 60) amount / 60 else 1 
+                     else -> amount
+                 }
+                 return ParsedCommand.SetTimer(minutes)
+             }
         }
 
         // Web Search
-        if (text.startsWith("search ") || text.startsWith("google ") || text.startsWith("look up ")) {
-            val query = text.replace("search for ", "").replace("search ", "")
-                            .replace("google ", "").replace("look up ", "").trim()
+        val searchRegex = Regex("^(search|google|look up|find|search for|google for)\\s+(.+)$")
+        val searchMatch = searchRegex.find(text)
+        if (searchMatch != null) {
+            val query = searchMatch.groupValues[2].trim()
             if (query.isNotEmpty()) return ParsedCommand.WebSearch(query)
         }
 
-        // Open Camera (expanded: snap a photo/pic, shoot a picture, capture, take a snap/selfie)
-        if (text.contains("open camera") || text.contains("take photo") || text.contains("take a picture") ||
-            text.contains("snap a photo") || text.contains("snap a pic") || text.contains("shoot a picture") ||
-            text.contains("capture a photo") || text.contains("take a snap") || text.contains("take a selfie") ||
-            text.contains("capture a selfie")) {
+        // Open Camera
+        val cameraRegex = Regex("\\b(camera|photo|picture|pic|selfie|snap)\\b")
+        if (cameraRegex.containsMatchIn(text) && (text.contains("open") || text.contains("take") || text.contains("snap") || text.contains("shoot") || text.contains("capture"))) {
             return ParsedCommand.OpenCamera
         }
 
-        // Open Settings (expanded: take me to X settings, bring up wifi/bluetooth)
-        if (text.contains("wifi settings") || text.contains("bring up wifi") || text.contains("take me to wifi")) {
-            return ParsedCommand.OpenWifiSettings
-        }
-        if (text.contains("bluetooth settings") || text.contains("bring up bluetooth") || text.contains("take me to bluetooth")) {
-            return ParsedCommand.OpenBluetoothSettings
-        }
-        if (text.contains("open settings") || text.contains("take me to settings") || text.contains("bring up settings")) {
-            return ParsedCommand.OpenSettings
-        }
+        // Settings (Wifi, Bluetooth, System)
+        val wifiRegex = Regex("\\b(wifi|wi-fi|internet)\\b.*\\b(settings|menu|net)\\b|\\b(open|show)\\b.*\\b(wifi|wi-fi)\\b")
+        if (wifiRegex.containsMatchIn(text)) return ParsedCommand.OpenWifiSettings
+        
+        val bluetoothRegex = Regex("\\b(bluetooth|blue tooth)\\b.*\\b(settings|menu)\\b|\\b(open|show)\\b.*\\b(bluetooth|blue tooth)\\b")
+        if (bluetoothRegex.containsMatchIn(text)) return ParsedCommand.OpenBluetoothSettings
+        
+        val settingsRegex = Regex("\\b(settings|preferences|configuration)\\b|\\b(open|show)\\b.*\\b(settings)\\b")
+        if (settingsRegex.containsMatchIn(text)) return ParsedCommand.OpenSettings
 
         return ParsedCommand.Unknown
     }
 }
+

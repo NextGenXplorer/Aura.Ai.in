@@ -6,11 +6,16 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.BroadcastReceiver
 import android.telephony.SmsManager
+import android.app.role.RoleManager
+import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.EventChannel
 import com.aura.mobile.aura_mobile.assistant.AssistantForegroundService
+import com.aura.mobile.aura_mobile.assistant.AlarmScheduler
+import com.aura.mobile.aura_mobile.assistant.ReminderModel
+import com.aura.mobile.aura_mobile.assistant.ReminderRepository
 
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.aura.ai/memory"
@@ -102,11 +107,25 @@ class MainActivity: FlutterActivity() {
             }
         }
 
+        // Register the Email Draft handler — direct call to switch Flutter context
+        AssistantForegroundService.startEmailDraftHandler = { address ->
+            runOnUiThread {
+                assistantAiChannel?.invokeMethod("startEmailDraft", address)
+            }
+        }
+
         // If a query was pending (Flutter was dead when it arrived), forward it now
         val pending = AssistantForegroundService.pendingAiQuery
         if (pending != null) {
             AssistantForegroundService.pendingAiQuery = null
             assistantAiChannel?.invokeMethod("processAIQuery", pending)
+        }
+        
+        // If an email draft was pending
+        val pendingEmail = AssistantForegroundService.pendingEmailDraftAddress
+        if (pendingEmail != null) {
+            AssistantForegroundService.pendingEmailDraftAddress = null
+            assistantAiChannel?.invokeMethod("startEmailDraft", pendingEmail)
         }
 
         // Memory Channel
@@ -163,6 +182,24 @@ class MainActivity: FlutterActivity() {
                         result.error("INVALID", "Number and message required", null)
                     }
                 }
+                "launchEmailApp" -> {
+                    val address = call.argument<String>("address") ?: ""
+                    val subject = call.argument<String>("subject") ?: ""
+                    val body = call.argument<String>("body") ?: ""
+                    
+                    val emailIntent = android.content.Intent(android.content.Intent.ACTION_SENDTO).apply {
+                        data = android.net.Uri.parse("mailto:$address")
+                        putExtra(android.content.Intent.EXTRA_SUBJECT, subject)
+                        putExtra(android.content.Intent.EXTRA_TEXT, body)
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    try {
+                        startActivity(emailIntent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("EMAIL_FAILED", "Could not launch email app: ${e.message}", null)
+                    }
+                }
                 "callPhoneDirect" -> {
                     val number = call.argument<String>("number")
                     if (number != null) {
@@ -177,6 +214,38 @@ class MainActivity: FlutterActivity() {
                         toggleTorch(state, result)
                     } else {
                         result.error("INVALID", "State required", null)
+                    }
+                }
+                "scheduleReminder" -> {
+                    try {
+                        val title = call.argument<String>("title") ?: "Reminder"
+                        val desc = call.argument<String>("description") ?: ""
+                        val timeInMillis = call.argument<Long>("timeInMillis") ?: 0L
+                        val preReminder = call.argument<Boolean>("preReminderEnabled") ?: false
+
+                        if (timeInMillis == 0L) {
+                            result.error("INVALID", "Time required", null)
+                            return@setMethodCallHandler
+                        }
+
+                        val reminder = ReminderModel(
+                            title = title,
+                            description = desc,
+                            eventDateTime = timeInMillis,
+                            preReminderEnabled = preReminder
+                        )
+
+                        val repo = ReminderRepository(this@MainActivity)
+                        val id = repo.addReminder(reminder).toInt()
+                        
+                        val modelWithId = reminder.copy(id = id)
+                        val scheduler = AlarmScheduler(this@MainActivity)
+                        scheduler.scheduleReminder(modelWithId)
+
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.e("AuraAlarm", "Failed to schedule: \${e.message}")
+                        result.error("FAILED", "Could not schedule reminder", null)
                     }
                 }
                 "startAssistant" -> {

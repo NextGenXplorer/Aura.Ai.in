@@ -199,7 +199,32 @@ class ChatNotifier extends StateNotifier<ChatState> {
       );
 
       String fullResponse = '';
+      bool emailMarkerHandled = false;
       await for (final chunk in stream) {
+        // Intercept magic email draft marker emitted by orchestrator.
+        // Insert system message for UI chip, then skip this chunk.
+        if (!emailMarkerHandled && chunk.startsWith('__EMAIL_DRAFT__:')) {
+          final address = chunk
+              .replaceFirst('__EMAIL_DRAFT__:', '')
+              .replaceAll('\n', '')
+              .trim();
+          // Insert the system message BEFORE the last assistant placeholder.
+          // If we append it after, it becomes the last message and
+          // _updateLastMessage() can't find the assistant bubble to stream into.
+          final msgs = List<Map<String, String>>.from(state.messages);
+          final lastAssistantIdx =
+              msgs.lastIndexWhere((m) => m['role'] == 'assistant');
+          if (lastAssistantIdx >= 0) {
+            msgs.insert(lastAssistantIdx,
+                {'role': 'system', 'content': 'drafting_email_to:$address'});
+          } else {
+            msgs.add(
+                {'role': 'system', 'content': 'drafting_email_to:$address'});
+          }
+          state = state.copyWith(messages: msgs);
+          emailMarkerHandled = true;
+          continue; // Don't show the marker in the assistant response
+        }
         fullResponse += chunk;
         _updateLastMessage(fullResponse);
       }
@@ -214,6 +239,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
       _isProcessing = false; // Release mutex
     }
   }
+
+
 
   void _updateLastMessage(String newContent) {
     final newMessages = List<Map<String, String>>.from(state.messages);
@@ -249,6 +276,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   void clearChat() {
      _startNewSession();
+  }
+
+  void addOfflineMessage(Map<String, String> message) {
+    state = state.copyWith(
+      messages: [...state.messages, message],
+    );
+    _saveChat();
   }
 }
 
