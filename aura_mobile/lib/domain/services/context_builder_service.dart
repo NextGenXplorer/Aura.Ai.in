@@ -23,7 +23,7 @@ class ContextBuilderService {
     final buffer = StringBuffer();
 
     // 1. System Instruction
-    buffer.writeln("You are AURA, a privacy-first offline AI assistant. Answer concisely and helpfully.");
+    buffer.writeln("You are AURA, a privacy-first offline AI assistant. Answer concisely and helpfully. IMPORTANT: When writing HTML, always include CSS within <style> tags and JavaScript within <script> tags in a single ```html block. Do NOT create separate blocks for css or javascript.");
     
     // 2. Memory Context
     if (includeMemories) {

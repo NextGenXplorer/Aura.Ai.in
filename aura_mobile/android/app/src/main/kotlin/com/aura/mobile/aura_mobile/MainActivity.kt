@@ -188,7 +188,8 @@ class MainActivity: FlutterActivity() {
                     val body = call.argument<String>("body") ?: ""
                     
                     val emailIntent = android.content.Intent(android.content.Intent.ACTION_SENDTO).apply {
-                        data = android.net.Uri.parse("mailto:$address")
+                        data = android.net.Uri.parse("mailto:") // only email apps should handle this
+                        putExtra(android.content.Intent.EXTRA_EMAIL, arrayOf(address))
                         putExtra(android.content.Intent.EXTRA_SUBJECT, subject)
                         putExtra(android.content.Intent.EXTRA_TEXT, body)
                         addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)

@@ -220,7 +220,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       )
                     : ListView.builder(
                         controller: _scrollController,
-                        padding: const EdgeInsets.fromLTRB(16, 100, 16, 80), // Top padding for AppBar
+                        padding: const EdgeInsets.fromLTRB(0, 100, 0, 80), // No horizontal padding - items add their own
                         itemCount: visibleMessages.length,
                         itemBuilder: (context, index) {
                           final message = visibleMessages[index];
@@ -287,92 +287,85 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             }).toList();
                           }
 
-                           return Align(
-                            alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-                            child: Column(
-                              crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                              children: [
-                                Container(
-                                  margin: const EdgeInsets.symmetric(vertical: 8), 
-                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                  constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
-                                  decoration: BoxDecoration(
-                                    color: isUser ? const Color(0xFF2a2a30) : Colors.transparent, 
-                                    borderRadius: BorderRadius.circular(20).copyWith(
-                                      bottomRight: isUser ? Radius.zero : const Radius.circular(20),
-                                      bottomLeft: !isUser ? Radius.zero : const Radius.circular(20),
-                                    ),
-                                    border: isUser 
-                                        ? Border.all(color: const Color(0xFFc69c3a).withOpacity(0.3)) 
-                                        : null, 
-                                  ),
-                                  child: MarkdownBody(
-                                    data: displayContent,
-                                    builders: {
-                                      'code': CodeElementBuilder(context),
-                                    },
-                                    styleSheet: MarkdownStyleSheet(
-                                      p: TextStyle(
-                                        color: isUser ? Colors.white : Colors.white.withOpacity(0.9),
-                                        fontSize: 16,
-                                        height: 1.5,
-                                        fontFamily: GoogleFonts.outfit().fontFamily,
-                                      ),
-                                      strong: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                                      a: const TextStyle(color: Color(0xFFc69c3a), decoration: TextDecoration.underline),
-                                      code: const TextStyle(
-                                          color: Color(0xFFe6cf8e), 
-                                          backgroundColor: Color(0xFF1a1a20), 
-                                          fontFamily: 'monospace',
-                                          fontSize: 14,
-                                      ),
-                                    ),
-                                    onTapLink: (text, href, title) async {
-                                      if (href != null) {
-                                        final Uri url = Uri.parse(href);
-                                        if (await canLaunchUrl(url)) {
-                                          await launchUrl(url, mode: LaunchMode.externalApplication);
-                                        } else {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(content: Text('Could not launch $href')),
-                                          );
-                                        }
-                                      }
-                                    },
-                                    selectable: true,
-                                  ),
-                                ),
-                                if (options.isNotEmpty)
-                                  Padding(
-                                    padding: const EdgeInsets.only(left: 16, bottom: 8),
-                                    child: Wrap(
-                                      spacing: 8,
-                                      runSpacing: 8,
-                                      children: options.map((opt) {
-                                        return ActionChip(
-                                          label: Text(opt['label']!, style: GoogleFonts.outfit(color: Colors.white)),
-                                          backgroundColor: const Color(0xFF2a2a30),
-                                          side: const BorderSide(color: Color(0xFFc69c3a)),
-                                          onPressed: () {
-                                            _sendMessage(opt['value']!);
-                                          },
-                                        );
-                                      }).toList(),
-                                    ),
-                                  ),
+                           // USER MESSAGE: right-aligned constrained pill
+                           if (isUser) return Align(
+                             alignment: Alignment.centerRight,
+                             child: Container(
+                               margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                               constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
+                               decoration: BoxDecoration(
+                                 color: const Color(0xFF2a2a30),
+                                 borderRadius: BorderRadius.circular(20).copyWith(bottomRight: Radius.zero),
+                                 border: Border.all(color: const Color(0xFFc69c3a).withOpacity(0.3)),
+                               ),
+                               child: MarkdownBody(
+                                 data: displayContent,
+                                 styleSheet: MarkdownStyleSheet(
+                                   p: TextStyle(color: Colors.white, fontSize: 16, height: 1.5, fontFamily: GoogleFonts.outfit().fontFamily),
+                                   strong: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                   a: const TextStyle(color: Color(0xFFc69c3a), decoration: TextDecoration.underline),
+                                   code: const TextStyle(color: Color(0xFFe6cf8e), backgroundColor: Color(0xFF1a1a20), fontFamily: 'monospace', fontSize: 14),
+                                 ),
+                                 selectable: true,
+                               ),
+                             ),
+                           );
 
-                                  // ✉️ EMAIL DRAFT CARD
-                                  if (isEmailDraft) _buildEmailDraftCard(
-                                    msgIndex: index,
-                                    address: draftAddress!,
-                                    subject: parsedSubject,
-                                    body: parsedBody,
-                                  ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
+                           // AI MESSAGE: full-width like email draft card
+                           return Column(
+                             crossAxisAlignment: CrossAxisAlignment.start,
+                             children: [
+                               Padding(
+                                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                                 child: MarkdownBody(
+                                   data: displayContent,
+                                   builders: {'code': CodeElementBuilder(context)},
+                                   styleSheet: MarkdownStyleSheet(
+                                     p: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 16, height: 1.5, fontFamily: GoogleFonts.outfit().fontFamily),
+                                     strong: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                     a: const TextStyle(color: Color(0xFFc69c3a), decoration: TextDecoration.underline),
+                                     code: const TextStyle(color: Color(0xFFe6cf8e), backgroundColor: Color(0xFF1a1a20), fontFamily: 'monospace', fontSize: 14),
+                                   ),
+                                   onTapLink: (text, href, title) async {
+                                     if (href != null) {
+                                       final Uri url = Uri.parse(href);
+                                       if (await canLaunchUrl(url)) {
+                                         await launchUrl(url, mode: LaunchMode.externalApplication);
+                                       } else {
+                                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not launch $href')));
+                                       }
+                                     }
+                                   },
+                                   selectable: true,
+                                 ),
+                               ),
+                               if (options.isNotEmpty)
+                                 Padding(
+                                   padding: const EdgeInsets.only(left: 4, bottom: 8),
+                                   child: Wrap(
+                                     spacing: 8, runSpacing: 8,
+                                     children: options.map((opt) {
+                                       return ActionChip(
+                                         label: Text(opt['label']!, style: GoogleFonts.outfit(color: Colors.white)),
+                                         backgroundColor: const Color(0xFF2a2a30),
+                                         side: const BorderSide(color: Color(0xFFc69c3a)),
+                                         onPressed: () { _sendMessage(opt['value']!); },
+                                       );
+                                     }).toList(),
+                                   ),
+                                 ),
+                               if (isEmailDraft) _buildEmailDraftCard(
+                                 msgIndex: index,
+                                 address: draftAddress!,
+                                 subject: parsedSubject,
+                                 body: parsedBody,
+                               ),
+                             ],
+                           );
+                         },
+                       ),
+
                  ),
 
                  // 2. Command Menu (Floating Popup)

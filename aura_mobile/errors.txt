@@ -1,50 +1,49 @@
-﻿
-  flutter : 
-  
-lib/ai/run_anywhere_service.dart:96:21: 
-> Error: Too few positional arguments: 
-1 
-  required, 0 given.
-  At line:1 char:1
-      + CategoryInfo          : 
-NotSpecif 
-     ied: (lib/ai/run_anyw...uired, 0 
-gi  
->   ven.:String) [], RemoteException
->     + FullyQualifiedErrorId : 
-NativeCom 
->    mandError
-   
-        _llama = Llama(modelPath: 
-    ^^^^^
-  
-lib/ai/run_anywhere_service.dart:121:22:
->  Error: The method 'prompt' isn't 
-  defined for the type 'Llama'.
-   - 'Llama' is from 
-        yield* 
-_llama!.prompt(fullPrompt);
-                       ^^^^^^
-> Target kernel_snapshot_program 
-failed: 
-> Exception
-  
-  
-> FAILURE: Build failed with an 
-exception.
-  
-  * What went wrong:
-> Execution failed for task 
-  ':app:compileFlutterBuildRelease'.
-  > Process 'command 
-  https://help.gradle.org.
-  
-> BUILD FAILED in 19s
-  Running Gradle task 
-'assembleRelease'...                    
-       20.1s
-> Gradle task assembleRelease failed 
-with 
-  exit code 1
+Running Gradle task 'assembleRelease'...                        
+../../../../../AppData/Local/Pub/Cache/hosted/pub.dev/flutter_widget_from_html_core-0.14.12/lib/src/widgets/html_flex.dart:69:7: Error: The non-abstract class 'HtmlFlex' is missing implementations for these members:
+ - Flex.spacing
+Try to either
+ - provide an implementation,
+ - inherit an implementation from a superclass or mixin,
+ - mark the class as abstract, or
+ - provide a 'noSuchMethod' implementation.
+
+class HtmlFlex extends MultiChildRenderObjectWidget
+      ^^^^^^^^
+/C:/flutter/packages/flutter/lib/src/widgets/basic.dart:5381:16: Context: 'Flex.spacing' is defined here.
+  final double spacing;
+               ^^^^^^^
+../../../../../AppData/Local/Pub/Cache/hosted/pub.dev/flutter_widget_from_html_core-0.14.12/lib/src/widgets/html_flex.dart:182:7: Error: The non-abstract class '_HtmlFlexRenderObject' is missing implementations for these members:
+ - RenderFlex.spacing
+ - RenderFlex.spacing=
+Try to either
+ - provide an implementation,
+ - inherit an implementation from a superclass or mixin,
+ - mark the class as abstract, or
+ - provide a 'noSuchMethod' implementation.
+
+class _HtmlFlexRenderObject extends RenderBox
+      ^^^^^^^^^^^^^^^^^^^^^
+/C:/flutter/packages/flutter/lib/src/rendering/flex.dart:694:14: Context: 'RenderFlex.spacing' is defined here.
+  double get spacing => _spacing;
+             ^^^^^^^
+/C:/flutter/packages/flutter/lib/src/rendering/flex.dart:696:7: Context: 'RenderFlex.spacing=' is defined here.
+  set spacing(double value) {
+      ^^^^^^^
+Target kernel_snapshot_program failed: Exception
 
 
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileFlutterBuildRelease'.
+> Process 'command 'C:\flutter\bin\flutter.bat'' finished with non-zero exit value 1
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 14s
+Running Gradle task 'assembleRelease'...                           14.3s
+Gradle task assembleRelease failed with exit code 1
