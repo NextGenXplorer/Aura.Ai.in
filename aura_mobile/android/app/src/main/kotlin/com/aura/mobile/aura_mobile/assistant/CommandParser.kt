@@ -8,6 +8,7 @@ sealed class ParsedCommand {
     data class TurnTorch(val state: Boolean) : ParsedCommand()
     data class SetTimer(val minutes: Int) : ParsedCommand()
     data class SetAlarm(val hour: Int, val minute: Int) : ParsedCommand()
+    data class SetReminder(val text: String, val timeInMillis: Long) : ParsedCommand()
     data class WebSearch(val query: String) : ParsedCommand()
     data class PlayYouTube(val query: String) : ParsedCommand()
     object GetTime : ParsedCommand()
@@ -57,7 +58,12 @@ object CommandParser {
         val callRegex = Regex("^(call|dial|phone|ring|ring up|make a call to|give)\\s+(.+?)(?:\\s+a\\s+(call|ring|buzz))?$")
         val callMatch = callRegex.find(text)
         if (callMatch != null) {
-            val contactName = callMatch.groupValues[2].trim()
+            var contactName = callMatch.groupValues[2].trim()
+            // Strip trailing time/context phrases like "at 9pm", "now", "please"
+            contactName = contactName
+                .replace(Regex("\\s+(at|by|around)\\s+\\d+\\s*(am|pm)?", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("\\s+(now|right now|immediately|asap|please)$", RegexOption.IGNORE_CASE), "")
+                .trim()
             if (contactName.isNotEmpty() && contactName != "me" && contactName != "it") {
                 return ParsedCommand.CallContact(contactName)
             }
@@ -72,14 +78,24 @@ object CommandParser {
             var contactName = smsMatch.groupValues[2].trim()
             var message = smsMatch.groupValues[4].trim()
 
-            // Handle case where "text mom hi" puts "mom hi" into group 2
+            // Handle case where "text mom hi" or "text hyy to pooja" puts everything into group 2
             if (message.isEmpty() && (verb == "text" || verb == "message" || verb == "sms")) {
-                val parts = contactName.split(Regex("\\s+"), limit = 2)
-                if (parts.size == 2) {
-                     val potentialName = parts[0]
-                     // Basic check if the first part is likely a name/number
-                     contactName = potentialName
-                     message = parts[1]
+                // First check for " to " separator: "text hyy to pooja" -> body=hyy, name=pooja
+                if (contactName.contains(" to ")) {
+                    val toIdx = contactName.indexOf(" to ")
+                    val potentialBody = contactName.substring(0, toIdx).trim()
+                    val potentialName = contactName.substring(toIdx + 4).trim()
+                    if (potentialName.isNotEmpty() && potentialBody.isNotEmpty()) {
+                        contactName = potentialName
+                        message = potentialBody
+                    }
+                } else {
+                    // No "to" separator: "text Pooja how are you" -> name=Pooja, body=how are you
+                    val parts = contactName.split(Regex("\\s+"), limit = 2)
+                    if (parts.size == 2) {
+                        contactName = parts[0]
+                        message = parts[1]
+                    }
                 }
             }
             if (contactName.isNotEmpty()) {
@@ -158,6 +174,105 @@ object CommandParser {
                  }
                  return ParsedCommand.SetTimer(minutes)
              }
+        }
+
+        // Reminders (e.g. remind me to call dad in 10 minutes, remind me in 5 minutes to take pills)
+        val reminderRegex = Regex("^(remind\\s+(me|us)\\s+(to|about)?|set\\s+a\\s+reminder\\s+(to|about)?|notify\\s+(me|us)\\s+(to|about)?|schedule\\s+a\\s+reminder\\s+(to|about)?)\\s+(.+)$")
+        val reminderMatch = reminderRegex.find(text)
+        if (reminderMatch != null) {
+            val fullReminderText = reminderMatch.groupValues[8].trim()
+            
+            // 1. Try relative time (in X minutes/hours)
+            val relativeTimeRegex = Regex("\\b(in|after)\\s+(\\d+)\\s*(min|minute|minutes|hr|hour|hours|day|days)\\b")
+            val relativeMatch = relativeTimeRegex.find(fullReminderText)
+            
+            var targetTime = 0L
+            var timePhraseToStrip = ""
+
+            if (relativeMatch != null) {
+                val amount = relativeMatch.groupValues[2].toLongOrNull() ?: 0L
+                val unit = relativeMatch.groupValues[3]
+                
+                val timeToAddInMillis = when {
+                    unit.startsWith("min") -> amount * 60 * 1000L
+                    unit.startsWith("h") -> amount * 60 * 60 * 1000L
+                    unit.startsWith("day") -> amount * 24 * 60 * 60 * 1000L
+                    else -> 0L
+                }
+                
+                if (timeToAddInMillis > 0L) {
+                    targetTime = System.currentTimeMillis() + timeToAddInMillis
+                    timePhraseToStrip = relativeMatch.value
+                }
+            } else {
+                // 2. Try specific date/time (e.g., "on 20/10/2026")
+                val specificDateRegex = Regex("\\b(?:on\\s+)?(\\d{1,2})[-/](\\d{1,2})(?:[-/](\\d{2,4}))?\\b")
+                val specificTimeRegex = Regex("\\b(?:at\\s+)?(1[0-2]|0?[1-9]|2[0-3])(?::([0-5][0-9]))?\\s*(am|pm)?\\b", RegexOption.IGNORE_CASE)
+                
+                val dateMatch = specificDateRegex.find(fullReminderText)
+                val timeMatch = specificTimeRegex.find(fullReminderText)
+                
+                if (dateMatch != null || timeMatch != null) {
+                    val calendar = java.util.Calendar.getInstance()
+                    val now = System.currentTimeMillis()
+                    
+                    if (dateMatch != null) {
+                        val day = dateMatch.groupValues[1].toInt()
+                        val month = dateMatch.groupValues[2].toInt() - 1 // Calendar months are 0-indexed
+                        var year = if (dateMatch.groupValues[3].isNotEmpty()) dateMatch.groupValues[3].toInt() else calendar.get(java.util.Calendar.YEAR)
+                        if (year < 100) year += 2000
+                        
+                        calendar.set(java.util.Calendar.YEAR, year)
+                        calendar.set(java.util.Calendar.MONTH, month)
+                        calendar.set(java.util.Calendar.DAY_OF_MONTH, day)
+                        timePhraseToStrip += dateMatch.value + " "
+                    }
+                    
+                    if (timeMatch != null) {
+                        var hour = timeMatch.groupValues[1].toInt()
+                        val minuteStr = timeMatch.groupValues[2]
+                        val minute = if (minuteStr.isNotEmpty()) minuteStr.toInt() else 0
+                        val ampm = timeMatch.groupValues[3].lowercase()
+                        
+                        if (ampm == "pm" && hour < 12) hour += 12
+                        if (ampm == "am" && hour == 12) hour = 0
+                        
+                        calendar.set(java.util.Calendar.HOUR_OF_DAY, hour)
+                        calendar.set(java.util.Calendar.MINUTE, minute)
+                        timePhraseToStrip += timeMatch.value + " "
+                    } else {
+                         // Default to 9 AM if no time is provided
+                         calendar.set(java.util.Calendar.HOUR_OF_DAY, 9)
+                         calendar.set(java.util.Calendar.MINUTE, 0)
+                    }
+                    
+                    calendar.set(java.util.Calendar.SECOND, 0)
+                    calendar.set(java.util.Calendar.MILLISECOND, 0)
+                    targetTime = calendar.timeInMillis
+                    
+                    // If no date was specified and the time has already passed today, roll over to tomorrow
+                    if (dateMatch == null && targetTime < now) {
+                        calendar.add(java.util.Calendar.DAY_OF_MONTH, 1)
+                        targetTime = calendar.timeInMillis
+                    }
+                }
+            }
+
+            if (targetTime > System.currentTimeMillis()) {
+                // Clean up title
+                var reminderTitle = fullReminderText
+                if (timePhraseToStrip.isNotEmpty()) {
+                    reminderTitle = reminderTitle.replace(timePhraseToStrip.trim(), "").trim()
+                }
+                
+                // Remove trailing/leading prepositions
+                reminderTitle = reminderTitle.replace(Regex("^(to|on|at|about)\\s+", RegexOption.IGNORE_CASE), "").trim()
+                reminderTitle = reminderTitle.replace(Regex("\\s+(to|on|at|about)$", RegexOption.IGNORE_CASE), "").trim()
+
+                if (reminderTitle.isEmpty()) reminderTitle = "Reminder"
+                
+                return ParsedCommand.SetReminder(reminderTitle, targetTime)
+            }
         }
 
         // Web Search

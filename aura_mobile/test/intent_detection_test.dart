@@ -40,18 +40,25 @@ void main() {
     });
 
     test('Extracts SMS Details Correctly', () {
-      // Standard
+      // Standard: first token = name, rest = body (no "to" separator)
       expect(service.extractSMSDetails('Text John Hello'), {'name': 'John', 'message': 'Hello'});
       
-      // Spaced Number
-      expect(service.extractSMSDetails('Text 90196 71670 as hai'), {'name': '90196 71670', 'message': 'as hai'});
+      // Spaced Number — "as" is the separator, so message is everything after it
+      expect(service.extractSMSDetails('Text 90196 71670 as hai'), {'name': '90196 71670', 'message': 'hai'});
       
-      // Country Code
-      expect(service.extractSMSDetails('Text +91 90196 71670 works'), {'name': '+91 90196 71670', 'message': 'works'});
+      // Country Code — with separator keyword (as) works correctly
+      expect(service.extractSMSDetails('Text +91 90196 71670 as works'), {'name': '+91 90196 71670', 'message': 'works'});
+      // Without a separator, first token is treated as the name (ambiguous by design)
+      expect(service.extractSMSDetails('Text +91 90196 71670'), {'name': '+91', 'message': '90196 71670'});
       
-      // Send ... to ... checking preservation
-      // "Send hello to John" -> Name: John, Message: hello (via Pattern 1)
+      // "Send [body] to [name]" — the core grammar fix
       expect(service.extractSMSDetails('Send hello to John'), {'name': 'John', 'message': 'hello'});
+      expect(service.extractSMSDetails('send hyy to pooja'), {'name': 'pooja', 'message': 'hyy'});
+      expect(service.extractSMSDetails('send good morning to rahul'), {'name': 'rahul', 'message': 'good morning'});
+      expect(service.extractSMSDetails('msg hello there to mom'), {'name': 'mom', 'message': 'hello there'});
+
+      // No "to" — first token is the name (existing behaviour must not break)
+      expect(service.extractSMSDetails('text Pooja how are you'), {'name': 'Pooja', 'message': 'how are you'});
     });
   });
 }

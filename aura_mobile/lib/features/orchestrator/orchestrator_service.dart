@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
-import 'dart:convert';
 
 import 'package:aura_mobile/core/services/app_control_service.dart';
 import 'package:aura_mobile/core/providers/ai_providers.dart';
@@ -12,7 +11,7 @@ import 'package:aura_mobile/domain/services/context_builder_service.dart';
 import 'package:aura_mobile/domain/services/intent_detection_service.dart';
 import 'package:aura_mobile/domain/services/llm_intent_classifier.dart';
 import 'package:aura_mobile/domain/services/memory_service.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:aura_mobile/domain/services/date_time_parser.dart';
 
 final orchestratorServiceProvider = Provider((ref) => OrchestratorService(
   ref.watch(intentDetectionServiceProvider),
@@ -354,65 +353,8 @@ class OrchestratorService {
     yield "⏰ **Scheduling reminder...**\n";
 
     final now = DateTime.now();
-    DateTime? scheduledTime;
-    final lowerMsg = message.toLowerCase();
-
-    // 1. Check relative time (in X minutes/hours)
-    final minMatch = RegExp(r'in\s+(\d+)\s*min').firstMatch(lowerMsg);
-    final hrMatch = RegExp(r'in\s+(\d+)\s*hour').firstMatch(lowerMsg);
-    
-    if (minMatch != null) {
-      scheduledTime = now.add(Duration(minutes: int.parse(minMatch.group(1)!)));
-    } else if (hrMatch != null) {
-      scheduledTime = now.add(Duration(hours: int.parse(hrMatch.group(1)!)));
-    } else {
-      // 2. Exact Time & Date parsing
-      int hour = now.hour;
-      int minute = 0;
-      int year = now.year;
-      int month = now.month;
-      int day = now.day;
-      bool hasSpecificTime = false;
-      bool hasSpecificDate = false;
-
-      // Extract Time
-      final timeMatch = RegExp(r'\b(1[0-2]|0?[1-9]|2[0-3])(?::([0-5][0-9]))?\s*(am|pm)?\b').firstMatch(lowerMsg);
-      if (timeMatch != null) {
-        hour = int.parse(timeMatch.group(1)!);
-        minute = timeMatch.group(2) != null ? int.parse(timeMatch.group(2)!) : 0;
-        final ampm = timeMatch.group(3);
-
-        if (ampm == 'pm' && hour < 12) hour += 12;
-        if (ampm == 'am' && hour == 12) hour = 0;
-        hasSpecificTime = true;
-      }
-
-      // Extract Date
-      if (lowerMsg.contains("tomorrow")) {
-        day += 1;
-        hasSpecificDate = true;
-      } else {
-        final dateMatch = RegExp(r'\b(\d{1,2})[-/](\d{1,2})(?:[-/](\d{2,4}))?\b').firstMatch(lowerMsg);
-        if (dateMatch != null) {
-          day = int.parse(dateMatch.group(1)!); // DD/MM expected
-          month = int.parse(dateMatch.group(2)!);
-          if (dateMatch.group(3) != null) {
-            year = int.parse(dateMatch.group(3)!);
-            if (year < 100) year += 2000;
-          }
-          hasSpecificDate = true;
-        }
-      }
-
-      if (hasSpecificTime || hasSpecificDate) {
-        scheduledTime = DateTime(year, month, day, hour, minute);
-        
-        // Auto-correct to tomorrow if time has already passed today and no specific date given
-        if (scheduledTime.isBefore(now) && !hasSpecificDate) {
-          scheduledTime = scheduledTime.add(const Duration(days: 1));
-        }
-      }
-    }
+    final DateTimeParser parser = DateTimeParser();
+    final scheduledTime = parser.parseReminderTime(message);
 
     if (scheduledTime == null || scheduledTime.isBefore(now)) {
       yield "I couldn't understand the exact future time for that reminder. Could you specify it clearly (e.g., 'remind me at 6:45 PM')?";
@@ -422,18 +364,23 @@ class OrchestratorService {
     // Extract Title using Regex removals
     var title = message;
     final removals = [
-      r'(?i)remind\s+(me|us)\s+(to|on|at|about)?',
-      r'(?i)notify\s+(me|us)\s+(to|on|at|about)?',
-      r'(?i)set\s+a\s+reminder\s+(to|on|at|about)?',
-      r'(?i)in\s+\d+\s*(minutes?|hours?)',
-      r'(?i)\b(at|on)\s*(1[0-2]|0?[1-9]|2[0-3])(?::([0-5][0-9]))?\s*(am|pm)?\b',
-      r'(?i)\b(1[0-2]|0?[1-9]|2[0-3])(?::([0-5][0-9]))?\s*(am|pm)?\b',
-      r'(?i)\btomorrow\b',
-      r'(?i)\b(\d{1,2})[-/](\d{1,2})(?:[-/](\d{2,4}))?\b',
+      r'remind\s+(me|us)\s+(to|on|at|about)?',
+      r'notify\s+(me|us)\s+(to|on|at|about)?',
+      r'set\s+a\s+reminder\s+(to|on|at|about)?',
+      r'schedule\s+a\s+reminder\s+(to|on|at|about)?',
+      r'in\s+\d+\s*(min|minute|minutes|hr|hour|hours|day|days)\b',
+      r'\b(at|on)\s*(1[0-2]|0?[1-9]|2[0-3])(?::([0-5][0-9]))?\s*(am|pm)?\b',
+      r'\b(1[0-2]|0?[1-9]|2[0-3])(?::([0-5][0-9]))?\s*(am|pm)?\b',
+      r'\btomorrow\b',
+      r'\btoday\b',
+      r'\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
+      r'\b(\d{1,2})[-/](\d{1,2})(?:[-/](\d{2,4}))?\b',
+      r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})\b',
+      r'\b(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)\b',
     ];
 
     for (var r in removals) {
-      title = title.replaceAll(RegExp(r), '');
+      title = title.replaceAll(RegExp(r, caseSensitive: false), '');
     }
     title = title.trim();
     if (title.isEmpty) title = "Reminder";

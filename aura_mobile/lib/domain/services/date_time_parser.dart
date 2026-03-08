@@ -20,6 +20,48 @@ class DateTimeParser {
     };
   }
 
+  /// Parses text for a specific reminder `DateTime`, handling relative times ("in 5 minutes")
+  /// and intelligent date/time merging (e.g. rolling over to tomorrow if time has passed).
+  DateTime? parseReminderTime(String text) {
+    final lowerText = text.toLowerCase();
+    final now = DateTime.now();
+    
+    // 1. Check relative time (in X minutes/hours/days)
+    final minMatch = RegExp(r'in\s+(\d+)\s*(min|minute|minutes)\b').firstMatch(lowerText);
+    final hrMatch = RegExp(r'in\s+(\d+)\s*(hr|hour|hours)\b').firstMatch(lowerText);
+    final dayMatch = RegExp(r'in\s+(\d+)\s*(day|days)\b').firstMatch(lowerText);
+    
+    if (minMatch != null) {
+      return now.add(Duration(minutes: int.parse(minMatch.group(1)!)));
+    } else if (hrMatch != null) {
+      return now.add(Duration(hours: int.parse(hrMatch.group(1)!)));
+    } else if (dayMatch != null) {
+      return now.add(Duration(days: int.parse(dayMatch.group(1)!)));
+    }
+
+    // 2. Exact Time & Date parsing
+    final parsed = parse(text);
+    final eventDate = parsed['date'] as DateTime?;
+    final eventTime = parsed['time'] as TimeOfDay?;
+    
+    if (eventDate == null && eventTime == null) {
+      return null;
+    }
+    
+    var finalDate = eventDate ?? DateTime(now.year, now.month, now.day);
+    var finalHour = eventTime?.hour ?? 9; // Default 9 AM if no time specified
+    var finalMinute = eventTime?.minute ?? 0;
+    
+    var scheduledTime = DateTime(finalDate.year, finalDate.month, finalDate.day, finalHour, finalMinute);
+    
+    // If only time was specified and it has already passed today, assume tomorrow
+    if (eventDate == null && eventTime != null && scheduledTime.isBefore(now)) {
+      scheduledTime = scheduledTime.add(const Duration(days: 1));
+    }
+    
+    return scheduledTime;
+  }
+
   DateTime? _extractDate(String text) {
     final now = DateTime.now();
 

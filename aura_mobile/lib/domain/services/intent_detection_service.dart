@@ -267,7 +267,7 @@ class IntentDetectionService {
       return IntentType.dialContact;
     }
 
-    // ── 8️⃣  SMS / Text ───────────────────────────────────────────────────
+    // ── 9️⃣  SMS / Text ───────────────────────────────────────────────────
     // Guard: SKIP if @email.com address present (handled as emailDraft above)
     // Also skip if message is about "sending an email" in general terms
     final _emailWordRe = RegExp(r'\b(email|e-mail|e\s*mail|gmail|mail)\b', caseSensitive: false);
@@ -594,6 +594,7 @@ class IntentDetectionService {
     }
 
     // "text John Hello", "msg Priya How are you"
+    // Also handles "send hyy to pooja", "text hello there to rahul"
     final cmdRe = RegExp(
       r'^(send\s+|write\s+|text\s+|message\s+|msg\s+|sms\s+)'
       r'(a\s+)?(sms\s+|text\s+|message\s+|msg\s+)?(to\s+)?',
@@ -602,16 +603,45 @@ class IntentDetectionService {
     final cm = cmdRe.firstMatch(clean);
     if (cm != null) {
       final remaining = clean.substring(cm.end).trim();
-      final tokens = remaining.split(RegExp(r'\s+'));
-      if (tokens.isNotEmpty) {
-        name = tokens.first;
-        if (tokens.length > 1) {
-          body = tokens.sublist(1).join(' ');
+      final loRemaining = remaining.toLowerCase();
+
+      // Check if remaining contains " to " — means "[body] to [name]"
+      if (loRemaining.contains(' to ')) {
+        final toIdx = loRemaining.indexOf(' to ');
+        final potentialBody = remaining.substring(0, toIdx).trim();
+        final potentialName = remaining.substring(toIdx + 4).trim();
+        // Only treat as "[body] to [name]" if the name part looks like a name
+        // (not a placeholder like "me", "1234567890" is still valid as a name)
+        if (potentialName.isNotEmpty && potentialBody.isNotEmpty) {
+          name = potentialName;
+          body = potentialBody;
           final bodySepRe = RegExp(r'^(as|saying)\s+', caseSensitive: false);
           body = body.replaceFirst(bodySepRe, '');
+          return {'name': name, 'message': body};
+        }
+      }
+
+      // Fallback: first token = name, rest = body
+      // e.g. "text Pooja how are you" (no "to" separator)
+      //
+      // But first check for an explicit message separator like "as" or "saying"
+      // This handles spaced phone numbers: "text 90196 71670 as hai" → name=90196 71670, body=hai
+      final bodySep = RegExp(r'\s+(as|saying)\s+', caseSensitive: false);
+      final sepMatch = bodySep.firstMatch(remaining);
+      if (sepMatch != null) {
+        name = remaining.substring(0, sepMatch.start).trim();
+        body = remaining.substring(sepMatch.end).trim();
+      } else {
+        final tokens = remaining.split(RegExp(r'\s+'));
+        if (tokens.isNotEmpty) {
+          name = tokens.first;
+          if (tokens.length > 1) {
+            body = tokens.sublist(1).join(' ');
+          }
         }
       }
     }
     return {'name': name, 'message': body};
   }
+
 }

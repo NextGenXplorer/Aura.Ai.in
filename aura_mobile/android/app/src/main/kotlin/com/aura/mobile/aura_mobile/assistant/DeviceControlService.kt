@@ -83,6 +83,7 @@ class DeviceControlService(private val context: Context) {
             is ParsedCommand.TurnTorch -> turnTorch(command.state, ttsManager)
             is ParsedCommand.SetTimer -> setTimer(command.minutes, ttsManager)
             is ParsedCommand.SetAlarm -> setAlarm(command.hour, command.minute, ttsManager)
+            is ParsedCommand.SetReminder -> setReminder(command.text, command.timeInMillis, ttsManager)
             is ParsedCommand.WebSearch -> searchWeb(command.query, ttsManager)
             is ParsedCommand.PlayYouTube -> searchYouTube(command.query, ttsManager)
             is ParsedCommand.GetTime -> speakTime(ttsManager)
@@ -277,6 +278,28 @@ class DeviceControlService(private val context: Context) {
             ttsManager?.speak("Alarm set for $hour and $minute minutes")
         } catch (e: Exception) {
             ttsManager?.speak("Failed to set alarm")
+        }
+    }
+
+    private fun setReminder(text: String, timeInMillis: Long, ttsManager: TtsManager?) {
+        try {
+            val repository = ReminderRepository(context)
+            val scheduler = AlarmScheduler(context)
+            
+            val reminder = ReminderModel(
+                title = text,
+                description = "",
+                eventDateTime = timeInMillis,
+                preReminderEnabled = true
+            )
+            val id = repository.addReminder(reminder)
+            val savedReminder = reminder.copy(id = id.toInt())
+            scheduler.scheduleReminder(savedReminder)
+            
+            val timeString = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timeInMillis))
+            ttsManager?.speak("Reminder set for $timeString")
+        } catch (e: Exception) {
+            ttsManager?.speak("Failed to set reminder")
         }
     }
 

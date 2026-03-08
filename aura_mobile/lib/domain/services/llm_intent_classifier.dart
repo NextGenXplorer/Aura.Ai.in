@@ -29,6 +29,7 @@ class LLMIntentClassifier {
       '"fire up Chrome" -> OPEN_APP|Chrome\n'
       '"snap a pic" -> OPEN_CAMERA\n'
       '"drop a text to Mom saying hi" -> SEND_SMS|Mom|hi\n'
+
       '"turn the light on" -> TORCH|on\n'
       '"take me to wifi settings" -> OPEN_SETTINGS|wifi\n'
       '"what is quantum physics" -> NORMAL_CHAT';
