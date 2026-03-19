@@ -12,7 +12,7 @@ class AlarmScheduler(private val context: Context) {
 
     private val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
-    fun scheduleReminder(reminder: ReminderModel) {
+    fun scheduleReminder(reminder: ReminderModel): Boolean {
         // Schedule Main Alarm
         val mainIntent = Intent(context, ReminderReceiver::class.java).apply {
             action = "ALARM_TRIGGERED"
@@ -23,36 +23,44 @@ class AlarmScheduler(private val context: Context) {
         
         val mainPendingIntent = PendingIntent.getBroadcast(
             context,
-            reminder.id, // Use reminder ID as request code
+            reminder.id,
             mainIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                if (alarmManager.canScheduleExactAlarms()) {
-                    alarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
-                        reminder.eventDateTime,
-                        mainPendingIntent
-                    )
-                } else {
-                    Log.w("AuraAlarm", "Cannot schedule exact alarm. Missing permission.")
-                }
-            } else {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    reminder.eventDateTime,
-                    mainPendingIntent
-                )
-            }
-        } catch (e: SecurityException) {
-            Log.e("AuraAlarm", "SecurityException scheduling exact alarm: ${e.message}")
-        }
+        val scheduled = scheduleExactOrApproximate(reminder.eventDateTime, mainPendingIntent, "main alarm #${reminder.id}")
 
         // Schedule Pre-Reminder if enabled
         if (reminder.preReminderEnabled) {
             schedulePreReminder(reminder)
+        }
+        return scheduled
+    }
+
+    /** Schedules an exact alarm using setAlarmClock which bypasses Doze and exact-alarm restrictions */
+    private fun scheduleExactOrApproximate(timeMillis: Long, pendingIntent: PendingIntent, label: String): Boolean {
+        return try {
+            // Create a generic intent for the 'showIntent' which is required by some OEMs for setAlarmClock
+            val showIntent = Intent(context, com.aura.mobile.aura_mobile.MainActivity::class.java)
+            val showPendingIntent = PendingIntent.getActivity(
+                context, 0, showIntent, 
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            
+            val alarmClockInfo = AlarmManager.AlarmClockInfo(timeMillis, showPendingIntent)
+            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
+            
+            Log.d("AuraAlarm", "AlarmClock perfectly scheduled for $label")
+            true
+        } catch (e: Exception) {
+            Log.e("AuraAlarm", "Exception scheduling AlarmClock for $label: ${e.message}")
+            try {
+                // Absolute fallback
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, timeMillis, pendingIntent)
+            } catch (e2: Exception) {
+               alarmManager.setWindow(AlarmManager.RTC_WAKEUP, timeMillis, 1000L, pendingIntent)
+            }
+            true
         }
     }
 
@@ -76,42 +84,21 @@ class AlarmScheduler(private val context: Context) {
             eventTime - oneDayMillis
         }
 
-        // Only schedule if pre-reminder time is still in the future
-        if (preReminderTime > now + 60000L) { // at least 1 min in the future
+        // Only schedule if pre-reminder time is still in the future (at least 1 min)
+        if (preReminderTime > now + 60_000L) {
             val preIntent = Intent(context, ReminderReceiver::class.java).apply {
                 action = "ALARM_TRIGGERED"
                 putExtra("reminder_id", reminder.id)
                 putExtra("title", reminder.title)
                 putExtra("is_pre_reminder", true)
             }
-            
-            // Offset the request code for the pre-reminder by adding a large constant
             val prePendingIntent = PendingIntent.getBroadcast(
                 context,
-                reminder.id + 50000, 
+                reminder.id + 50000,
                 preIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    if (alarmManager.canScheduleExactAlarms()) {
-                        alarmManager.setExactAndAllowWhileIdle(
-                            AlarmManager.RTC_WAKEUP,
-                            preReminderTime,
-                            prePendingIntent
-                        )
-                    }
-                } else {
-                    alarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
-                        preReminderTime,
-                        prePendingIntent
-                    )
-                }
-            } catch (e: SecurityException) {
-                Log.e("AuraAlarm", "SecurityException scheduling pre-reminder: ${e.message}")
-            }
+            scheduleExactOrApproximate(preReminderTime, prePendingIntent, "pre-reminder #${reminder.id}")
         }
     }
 
@@ -121,7 +108,7 @@ class AlarmScheduler(private val context: Context) {
         val snoozeIntent = Intent(context, ReminderReceiver::class.java).apply {
             action = "ALARM_TRIGGERED"
             putExtra("reminder_id", id)
-            putExtra("title", "Snoozed: $title")
+            putExtra("title", title) // Keep original title, ReminderReceiver knows it's a snooze re-fire
             putExtra("is_pre_reminder", false)
         }
         
@@ -133,23 +120,19 @@ class AlarmScheduler(private val context: Context) {
         )
 
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                if (alarmManager.canScheduleExactAlarms()) {
-                    alarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
-                        snoozeTime,
-                        snoozePendingIntent
-                    )
-                }
-            } else {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    snoozeTime,
-                    snoozePendingIntent
-                )
+            val showIntent = Intent(context, com.aura.mobile.aura_mobile.MainActivity::class.java)
+            val showPendingIntent = PendingIntent.getActivity(
+                context, 0, showIntent, 
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val alarmClockInfo = AlarmManager.AlarmClockInfo(snoozeTime, showPendingIntent)
+            alarmManager.setAlarmClock(alarmClockInfo, snoozePendingIntent)
+        } catch (e: Exception) {
+            try {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, snoozeTime, snoozePendingIntent)
+            } catch (e2: Exception) {
+                alarmManager.setWindow(AlarmManager.RTC_WAKEUP, snoozeTime, 1000L, snoozePendingIntent)
             }
-        } catch (e: SecurityException) {
-            Log.e("AuraAlarm", "SecurityException scheduling snooze: ${e.message}")
         }
     }
 

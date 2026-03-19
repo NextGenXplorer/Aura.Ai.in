@@ -221,10 +221,21 @@ class MainActivity: FlutterActivity() {
                     try {
                         val title = call.argument<String>("title") ?: "Reminder"
                         val desc = call.argument<String>("description") ?: ""
-                        val timeInMillis = call.argument<Long>("timeInMillis") ?: 0L
+                        // Safer casting for Long from Flutter (can arrive as Int if small)
+                        val timeArg = call.argument<Any>("timeInMillis")
+                        val timeInMillis = when (timeArg) {
+                            is Long -> timeArg
+                            is Int -> timeArg.toLong()
+                            is Number -> timeArg.toLong()
+                            else -> 0L
+                        }
+                        
                         val preReminder = call.argument<Boolean>("preReminderEnabled") ?: false
 
+                        Log.d("AuraAlarm", "Native: Received scheduleReminder - Title: $title, Time: $timeInMillis")
+
                         if (timeInMillis == 0L) {
+                            Log.e("AuraAlarm", "Native: Invalid time (0L)")
                             result.error("INVALID", "Time required", null)
                             return@setMethodCallHandler
                         }
@@ -237,16 +248,19 @@ class MainActivity: FlutterActivity() {
                         )
 
                         val repo = ReminderRepository(this@MainActivity)
-                        val id = repo.addReminder(reminder).toInt()
+                        val id = repo.addReminder(reminder)
+                        Log.d("AuraAlarm", "Native: Added reminder to DB, ID: $id")
                         
-                        val modelWithId = reminder.copy(id = id)
+                        val modelWithId = reminder.copy(id = id.toInt())
                         val scheduler = AlarmScheduler(this@MainActivity)
-                        scheduler.scheduleReminder(modelWithId)
-
-                        result.success(true)
+                        val scheduled = scheduler.scheduleReminder(modelWithId)
+                        
+                        Log.d("AuraAlarm", "Native: Scheduled status: $scheduled")
+                        result.success(scheduled)
                     } catch (e: Exception) {
-                        Log.e("AuraAlarm", "Failed to schedule: \${e.message}")
-                        result.error("FAILED", "Could not schedule reminder", null)
+                        Log.e("AuraAlarm", "Native: Failed to schedule: ${e.message}")
+                        e.printStackTrace()
+                        result.error("FAILED", "Could not schedule reminder: ${e.message}", null)
                     }
                 }
                 "startAssistant" -> {
@@ -308,6 +322,15 @@ class MainActivity: FlutterActivity() {
     }
 
     private fun launchApp(appName: String, result: MethodChannel.Result) {
+        // [FIX] Handle navigation requests sent through openApp channel
+        if (appName.startsWith("navigate:")) {
+            val destination = appName.substringAfter("navigate:")
+            val deviceControl = com.aura.mobile.aura_mobile.assistant.DeviceControlService(this@MainActivity)
+            deviceControl.navigate(destination)
+            result.success("Navigating to $destination")
+            return
+        }
+
         val pm = packageManager
         val packages = pm.getInstalledPackages(0)
 

@@ -111,6 +111,9 @@ class AssistantForegroundService : Service() {
                 retryCount = 0
                 handleRecognizedText(text)
             },
+            onPartialResult = { partialText ->
+                overlayManager.updateListeningText(partialText)
+            },
             onError = { error ->
                 Log.e("AuraAssistant", "Voice Error: $error")
                 if (retryCount < 1) {
@@ -182,9 +185,14 @@ class AssistantForegroundService : Service() {
         // Set up static streaming callbacks so MainActivity can push chunks/completion
         onAiChunk = { chunk ->
             if (isWaitingForAI) {
-                // Cancel timeout on first chunk
+                // Reset timeout on every chunk to prevent infinite hang if the language model stalls midway
                 aiTimeoutHandler.removeCallbacks(aiTimeoutRunnable)
-                broadcastState("SPEAKING")
+                aiTimeoutHandler.postDelayed(aiTimeoutRunnable, AI_TIMEOUT_MS)
+
+                // If going from processing to speaking
+                if (currentState == "PROCESSING") {
+                    broadcastState("SPEAKING")
+                }
                 ttsManager.speakQueued(chunk)
             }
         }
@@ -306,11 +314,11 @@ class AssistantForegroundService : Service() {
             val response = text.lowercase()
             if (response == "yes" || response == "yeah" || response == "sure" || response == "send it") {
                 executePendingCommand()
+                ttsManager.onAllSpoken { broadcastState("IDLE") }
             } else {
                 ttsManager.speak("Cancelled.")
-                overlayManager.updateState("IDLE")
+                ttsManager.onAllSpoken { broadcastState("IDLE") }
             }
-            broadcastState("IDLE")
             isWaitingForConfirmation = false
             pendingCommand = null
             return
@@ -339,7 +347,7 @@ class AssistantForegroundService : Service() {
                 when {
                     matches.isEmpty() -> {
                         ttsManager.speak("I couldn't find a contact named ${command.contactName}")
-                        broadcastState("IDLE")
+                        ttsManager.onAllSpoken { broadcastState("IDLE") }
                     }
                     matches.size == 1 -> {
                         // Single match: confirm and call
@@ -359,7 +367,7 @@ class AssistantForegroundService : Service() {
                         overlayManager.showContactPicker(matches) { selected ->
                             isWaitingForContactSelection = false
                             deviceControlService.callByNumber(selected.number, selected.displayName, ttsManager)
-                            broadcastState("IDLE")
+                            ttsManager.onAllSpoken { broadcastState("IDLE") }
                         }
                     }
                 }
@@ -373,9 +381,50 @@ class AssistantForegroundService : Service() {
             is ParsedCommand.Unknown -> {
                 requestAIProcessing(text)
             }
+            is ParsedCommand.SetReminder -> {
+                val repository = ReminderRepository(this)
+                val scheduler = AlarmScheduler(this)
+
+                val reminder = ReminderModel(
+                    title = command.text,
+                    description = "",
+                    eventDateTime = command.timeInMillis,
+                    preReminderEnabled = true
+                )
+                val id = repository.addReminder(reminder)
+                val savedReminder = reminder.copy(id = id.toInt())
+                scheduler.scheduleReminder(savedReminder)
+
+                val cal = java.util.Calendar.getInstance().apply {
+                    timeInMillis = command.timeInMillis
+                }
+                val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
+                val minute = cal.get(java.util.Calendar.MINUTE)
+                val amPm = if (hour < 12) "AM" else "PM"
+                val displayHour = if (hour % 12 == 0) 12 else hour % 12
+                val timeStr = if (minute == 0) "$displayHour $amPm" else "$displayHour ${minute} $amPm"
+
+                val today = java.util.Calendar.getInstance()
+                val isTomorrow = (cal.get(java.util.Calendar.DAY_OF_YEAR) - today.get(java.util.Calendar.DAY_OF_YEAR)) == 1
+                    && cal.get(java.util.Calendar.YEAR) == today.get(java.util.Calendar.YEAR)
+                val isToday = cal.get(java.util.Calendar.DAY_OF_YEAR) == today.get(java.util.Calendar.DAY_OF_YEAR)
+                    && cal.get(java.util.Calendar.YEAR) == today.get(java.util.Calendar.YEAR)
+
+                val dayStr = when {
+                    isToday -> "today"
+                    isTomorrow -> "tomorrow"
+                    else -> {
+                        val fmt = java.text.SimpleDateFormat("MMMM d", java.util.Locale.getDefault())
+                        "on ${fmt.format(java.util.Date(command.timeInMillis))}"
+                    }
+                }
+
+                ttsManager.speak("Got it. I'll remind you to ${command.text} $dayStr at $timeStr")
+                ttsManager.onAllSpoken { broadcastState("IDLE") }
+            }
             else -> {
                 deviceControlService.executeCommand(command, ttsManager)
-                broadcastState("IDLE")
+                ttsManager.onAllSpoken { broadcastState("IDLE") }
             }
         }
     }

@@ -208,6 +208,12 @@ class OrchestratorService {
         }
         break;
 
+      case IntentType.navigation:
+        final destination = classifiedIntent?.params['destination'] ?? _intentService.extractNavigationDestination(message);
+        yield "🗺️ **Getting directions to $destination...**";
+        await _appControlService.openApp("navigate:$destination"); 
+        break;
+
       case IntentType.normalChat:
         yield* _handleLLMFlow(message, chatHistory, includeMemories: true, includeDocuments: hasDocuments);
         break;
@@ -388,7 +394,7 @@ class OrchestratorService {
     // Schedule seamlessly
     try {
       final timeInMillis = scheduledTime.millisecondsSinceEpoch;
-      final channel = MethodChannel('com.aura.ai/memory'); 
+      final channel = MethodChannel('com.aura.ai/app_control'); 
       await channel.invokeMethod('scheduleReminder', {
         'title': title,
         'description': '',
@@ -396,8 +402,14 @@ class OrchestratorService {
         'preReminderEnabled': true
       });
 
-      final formattedDate = scheduledTime.toString().substring(0, 16);
-      yield "✅ Reminder set for **$title** at **$formattedDate**.";
+      final hour = scheduledTime.hour % 12 == 0 ? 12 : scheduledTime.hour % 12;
+      final minute = scheduledTime.minute.toString().padLeft(2, '0');
+      final amPm = scheduledTime.hour < 12 ? 'AM' : 'PM';
+      final now2 = DateTime.now();
+      final isToday = scheduledTime.day == now2.day && scheduledTime.month == now2.month;
+      final isTomorrow = scheduledTime.day == now2.day + 1 && scheduledTime.month == now2.month;
+      final dayStr = isToday ? 'today' : isTomorrow ? 'tomorrow' : '${scheduledTime.day}/${scheduledTime.month}';
+      yield "✅ Got it! I'll remind you to **$title** $dayStr at **$hour:$minute $amPm**.";
 
     } catch (e) {
       debugPrint("Failed to set native reminder: $e");

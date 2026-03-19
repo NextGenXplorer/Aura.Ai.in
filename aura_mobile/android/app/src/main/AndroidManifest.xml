@@ -12,7 +12,10 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     
     <!-- App Control Permissions -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
@@ -68,7 +71,15 @@
             android:stopWithTask="false"
             android:exported="false" />
             
-        <receiver android:name=".assistant.ReminderReceiver" android:exported="false" />
+        <!-- exported=true required: AlarmManager needs to deliver broadcasts when process is dead (Android 12+) -->
+        <receiver android:name=".assistant.ReminderReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="ALARM_TRIGGERED" />
+                <action android:name="com.aura.mobile.ACTION_SNOOZE" />
+                <action android:name="com.aura.mobile.ACTION_MARK_DONE" />
+            </intent-filter>
+        </receiver>
         
         <receiver android:name=".assistant.BootReceiver" android:exported="true">
             <intent-filter>

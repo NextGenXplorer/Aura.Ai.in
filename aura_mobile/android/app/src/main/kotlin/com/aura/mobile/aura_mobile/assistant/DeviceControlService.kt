@@ -14,6 +14,8 @@ import android.provider.AlarmClock
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import android.content.ClipboardManager
+import android.app.NotificationManager
 
 class DeviceControlService(private val context: Context) {
 
@@ -95,6 +97,12 @@ class DeviceControlService(private val context: Context) {
             is ParsedCommand.OpenWifiSettings -> openWifiSettings(ttsManager)
             is ParsedCommand.OpenBluetoothSettings -> openBluetoothSettings(ttsManager)
             is ParsedCommand.OpenSettings -> openSettings(ttsManager)
+            is ParsedCommand.Navigate -> navigate(command.destination, ttsManager)
+            is ParsedCommand.PlayMusic -> playMusic(command.query, ttsManager)
+            is ParsedCommand.ToggleSetting -> toggleSetting(command.setting, command.state, ttsManager)
+            is ParsedCommand.ReadClipboard -> readClipboard(ttsManager)
+            is ParsedCommand.FindMyPhone -> findMyPhone(ttsManager)
+            is ParsedCommand.TakeSelfie -> takeSelfie(ttsManager)
             is ParsedCommand.Unknown -> {
                 ttsManager?.speak("I didn't understand the command.")
             }
@@ -371,6 +379,125 @@ class DeviceControlService(private val context: Context) {
             }
         } catch (e: Exception) {
             ttsManager?.speak("Failed to change volume")
+        }
+    }
+
+    fun navigate(destination: String, ttsManager: TtsManager? = null) {
+        try {
+            // Use universal geo intent first which is more standard
+            val uri = Uri.parse("google.navigation:q=${Uri.encode(destination)}")
+            val intent = Intent(Intent.ACTION_VIEW, uri)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            
+            // Try specific maps intent
+            context.startActivity(intent)
+            ttsManager?.speak("Navigating to $destination")
+        } catch (e: Exception) {
+            try {
+                // Fallback to geo:0,0?q=... which almost every mapping app supports
+                val geoUri = Uri.parse("geo:0,0?q=${Uri.encode(destination)}")
+                val geoIntent = Intent(Intent.ACTION_VIEW, geoUri)
+                geoIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(geoIntent)
+                ttsManager?.speak("Finding directions for $destination")
+            } catch (e2: Exception) {
+                // Final fallback: Search web
+                searchWeb("directions to $destination", ttsManager)
+            }
+        }
+    }
+
+    fun playMusic(query: String, ttsManager: TtsManager? = null) {
+        try {
+            val intent = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
+                putExtra(android.app.SearchManager.QUERY, query)
+            }
+            context.startActivity(intent)
+            ttsManager?.speak("Playing $query")
+        } catch (e: Exception) {
+            ttsManager?.speak("Could not find a music app to play $query")
+        }
+    }
+
+    fun toggleSetting(setting: String, state: Boolean, ttsManager: TtsManager? = null) {
+        when (setting.lowercase()) {
+            "wifi" -> { openWifiSettings(ttsManager); ttsManager?.speak("Opening Wi-Fi setup") }
+            "bluetooth" -> { openBluetoothSettings(ttsManager); ttsManager?.speak("Opening Bluetooth setup") }
+            "donotdisturb", "dnd" -> toggleDnd(state, ttsManager)
+            else -> ttsManager?.speak("I cannot change the $setting setting directly.")
+        }
+    }
+
+    private fun toggleDnd(state: Boolean, ttsManager: TtsManager?) {
+        try {
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (notificationManager.isNotificationPolicyAccessGranted) {
+                if (state) {
+                    notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
+                    ttsManager?.speak("Do not disturb is now on")
+                } else {
+                    notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
+                    ttsManager?.speak("Do not disturb is now off")
+                }
+            } else {
+                ttsManager?.speak("I need permission to change do not disturb settings.")
+                val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+            }
+        } catch (e: Exception) {
+            ttsManager?.speak("Error changing do not disturb settings")
+        }
+    }
+
+    fun readClipboard(ttsManager: TtsManager? = null) {
+        try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            if (clipboard.hasPrimaryClip() && clipboard.primaryClip?.itemCount ?: 0 > 0) {
+                val text = clipboard.primaryClip?.getItemAt(0)?.text?.toString()
+                if (!text.isNullOrBlank()) {
+                    ttsManager?.speak("Your clipboard says: $text")
+                } else {
+                    ttsManager?.speak("Your clipboard is empty or isn't text.")
+                }
+            } else {
+                ttsManager?.speak("Your clipboard is empty.")
+            }
+        } catch (e: Exception) {
+            ttsManager?.speak("I couldn't read your clipboard.")
+        }
+    }
+
+    fun findMyPhone(ttsManager: TtsManager? = null) {
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val maxRing = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
+            val maxMusic = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            
+            // Set volumes to max
+            audioManager.setStreamVolume(AudioManager.STREAM_RING, maxRing, 0)
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxMusic, 0)
+            
+            ttsManager?.speak("I am right here! Identifying location now.")
+        } catch (e: Exception) {
+            ttsManager?.speak("Failed to ring phone.")
+        }
+    }
+
+    fun takeSelfie(ttsManager: TtsManager? = null) {
+        try {
+            val intent = Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            intent.putExtra("android.intent.extras.CAMERA_FACING", 1) // FRONT CAMERA (old way)
+            intent.putExtra("android.intent.extra.USE_FRONT_CAMERA", true) // FRONT CAMERA (new way)
+            intent.putExtra("com.google.assistant.extra.USE_FRONT_CAMERA", true) // FRONT CAMERA (assistant way)
+            
+            context.startActivity(intent)
+            ttsManager?.speak("Get ready for a selfie!")
+        } catch (e: Exception) {
+            ttsManager?.speak("Error opening front camera")
         }
     }
 }

@@ -15,7 +15,8 @@ enum IntentType {
   dialContact,
   sendSMS,
   torchControl,
-  reminderSet
+  reminderSet,
+  navigation
 }
 
 final intentDetectionServiceProvider = Provider((ref) => IntentDetectionService());
@@ -132,6 +133,20 @@ class IntentDetectionService {
     ).hasMatch(lo)) {
       debugPrint('INTENT_DETECTION: Reminder command → reminderSet');
       return IntentType.reminderSet;
+    }
+
+    // ── 3️⃣  Navigation ────────────────────────────────────────────────────
+    // Must trigger on "navigate to", "directions to", "take me to" (for places, not apps)
+    if (RegExp(
+      r'^(navigate\s+to|directions\s+to|get\s+directions\s+to|'
+      r'how\s+to\s+get\s+to|way\s+to|take\s+me\s+to)\s+\S',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      // Small heuristic: if it contains "settings" or "camera", those take priority
+      if (!lo.contains('settings') && !lo.contains('camera')) {
+        debugPrint('INTENT_DETECTION: Navigation command → navigation');
+        return IntentType.navigation;
+      }
     }
 
     // ── 3️⃣  Memory Store ─────────────────────────────────────────────────
@@ -339,6 +354,10 @@ class IntentDetectionService {
       r'get\s+me\s+to|take\s+me\s+to|redirect\s+to)\s+\S',
       caseSensitive: false,
     ).hasMatch(lo)) {
+      // Sub-route: if it starts with 'navigate to' or 'directions to', it's NAVIGATION
+      if (RegExp(r'^(navigate|directions|get\s+directions|take\s+me|how\s+to\s+get)\s+to', caseSensitive: false).hasMatch(lo)) {
+         return IntentType.navigation;
+      }
       // Sub-route: if target is a setting/camera word, prefer those intents
       if (RegExp(r'\b(settings?|configuration|preferences)\b', caseSensitive: false).hasMatch(lo)) {
         return IntentType.openSettings;
@@ -644,4 +663,15 @@ class IntentDetectionService {
     return {'name': name, 'message': body};
   }
 
+  /// Navigation destination (strips navigate/directions prefix).
+  String extractNavigationDestination(String message) {
+    debugPrint('INTENT_DETECTION: Extracting destination from: $message');
+    final prefixRe = RegExp(
+      r'^(navigate\s+to|directions\s+to|get\s+directions\s+to|'
+      r'how\s+to\s+get\s+to|way\s+to|take\s+me\s+to|get\s+me\s+to)\s+',
+      caseSensitive: false,
+    );
+    final m = prefixRe.firstMatch(message.trim());
+    return m != null ? message.trim().substring(m.end).trim() : message.trim();
+  }
 }

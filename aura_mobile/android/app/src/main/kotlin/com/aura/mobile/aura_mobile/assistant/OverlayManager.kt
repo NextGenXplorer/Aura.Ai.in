@@ -92,6 +92,14 @@ class OverlayManager(private val context: Context) {
         }
     }
 
+    fun updateListeningText(text: String) {
+        handler.post {
+            if (overlayView == null) return@post
+            val statusText: TextView? = overlayView!!.findViewWithTag("status_text")
+            statusText?.text = text
+        }
+    }
+
     fun hideOverlay() {
         handler.post {
             if (overlayView == null) return@post

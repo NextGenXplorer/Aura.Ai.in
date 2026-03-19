@@ -3,9 +3,14 @@ package com.aura.mobile.aura_mobile.assistant
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import android.os.Bundle
 
 class ReminderReceiver : BroadcastReceiver() {
+    private var tts: TextToSpeech? = null
+
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action
         Log.d("AuraAlarm", "Received broadcast: $action")
@@ -22,9 +27,10 @@ class ReminderReceiver : BroadcastReceiver() {
                 if (reminderId != -1) {
                     notificationHelper.showReminderNotification(reminderId, title, isPreReminder)
                     
-                    // Note: If you want to automatically clean up elapsed normal reminders,
-                    // you can invoke ReminderRepository(context).deleteReminder(reminderId) here 
-                    // AFTER displaying, but it's often better to let the user "Mark Done" first.
+                    // Announce the reminder out loud using Text-To-Speech
+                    if (!isPreReminder) {
+                        speakReminder(context, title)
+                    }
                 }
             }
             NotificationManagerHelper.SNOOZE_ACTION -> {
@@ -32,10 +38,7 @@ class ReminderReceiver : BroadcastReceiver() {
                 val title = intent.getStringExtra("title") ?: "Reminder"
 
                 if (reminderId != -1) {
-                    // Schedule snooze alarm for 10 minutes
                     alarmScheduler.scheduleSnooze(reminderId, title)
-                    
-                    // Clear the current notification
                     notificationHelper.cancelNotification(reminderId)
                     Log.d("AuraAlarm", "Snoozed reminder $reminderId for 10m.")
                 }
@@ -43,15 +46,55 @@ class ReminderReceiver : BroadcastReceiver() {
             NotificationManagerHelper.MARK_DONE_ACTION -> {
                 val reminderId = intent.getIntExtra(NotificationManagerHelper.EXTRA_REMINDER_ID, -1)
                 if (reminderId != -1) {
-                    // Clear the notification
                     notificationHelper.cancelNotification(reminderId)
-                    
-                    // Delete from database
                     val repository = ReminderRepository(context)
                     repository.deleteReminder(reminderId)
                     Log.d("AuraAlarm", "Marked done & deleted reminder $reminderId.")
                 }
             }
+        }
+    }
+
+    private fun speakReminder(context: Context, title: String) {
+        // goAsync() keeps the BroadcastReceiver alive for up to 10 seconds while async work is done
+        val pendingResult = goAsync()
+        tts = TextToSpeech(context.applicationContext) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {}
+                    override fun onDone(utteranceId: String?) {
+                        shutdownTtsAndFinish(pendingResult)
+                    }
+                    override fun onError(utteranceId: String?) {
+                        shutdownTtsAndFinish(pendingResult)
+                    }
+                })
+                
+                val textToSpeak = "Aura Reminder: $title"
+                val params = Bundle()
+                params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "reminder_tts")
+                
+                val result = tts?.speak(textToSpeak, TextToSpeech.QUEUE_FLUSH, params, "reminder_tts")
+                
+                if (result == TextToSpeech.ERROR) {
+                    shutdownTtsAndFinish(pendingResult)
+                }
+            } else {
+                Log.e("AuraAlarm", "TTS Initialization failed")
+                pendingResult.finish()
+            }
+        }
+    }
+
+    private fun shutdownTtsAndFinish(pendingResult: PendingResult) {
+        try {
+            tts?.stop()
+            tts?.shutdown()
+            tts = null
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            pendingResult.finish()
         }
     }
 }

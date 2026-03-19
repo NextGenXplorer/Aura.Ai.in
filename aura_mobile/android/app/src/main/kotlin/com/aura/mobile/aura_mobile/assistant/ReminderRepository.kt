@@ -3,6 +3,14 @@ package com.aura.mobile.aura_mobile.assistant
 import android.content.ContentValues
 import android.content.Context
 
+/**
+ * Repository for reading/writing reminders to SQLite.
+ *
+ * NOTE: We intentionally do NOT call db.close() here.
+ * SQLiteOpenHelper manages the connection lifecycle. Manually closing
+ * after each operation causes "attempt to reopen an already-closed object"
+ * crashes on concurrent reads/writes from BootReceiver + Service.
+ */
 class ReminderRepository(context: Context) {
     private val dbHelper = ReminderDatabaseHelper(context)
 
@@ -15,9 +23,7 @@ class ReminderRepository(context: Context) {
             put(ReminderDatabaseHelper.COLUMN_PRE_REMINDER, if (reminder.preReminderEnabled) 1 else 0)
             put(ReminderDatabaseHelper.COLUMN_CREATED_AT, reminder.createdAt)
         }
-        val id = db.insert(ReminderDatabaseHelper.TABLE_REMINDERS, null, values)
-        db.close()
-        return id
+        return db.insert(ReminderDatabaseHelper.TABLE_REMINDERS, null, values)
     }
 
     fun getReminderById(id: Int): ReminderModel? {
@@ -28,24 +34,18 @@ class ReminderRepository(context: Context) {
             null, null, null
         )
         var reminder: ReminderModel? = null
-        if (cursor != null && cursor.moveToFirst()) {
-            val titleIdx = cursor.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_TITLE)
-            val descIdx = cursor.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_DESCRIPTION)
-            val dtIdx = cursor.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_DATETIME)
-            val preIdx = cursor.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_PRE_REMINDER)
-            val createdIdx = cursor.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_CREATED_AT)
-
-            reminder = ReminderModel(
-                id = id,
-                title = cursor.getString(titleIdx),
-                description = cursor.getString(descIdx),
-                eventDateTime = cursor.getLong(dtIdx),
-                preReminderEnabled = cursor.getInt(preIdx) == 1,
-                createdAt = cursor.getLong(createdIdx)
-            )
+        cursor?.use {
+            if (it.moveToFirst()) {
+                reminder = ReminderModel(
+                    id = id,
+                    title = it.getString(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_TITLE)),
+                    description = it.getString(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_DESCRIPTION)),
+                    eventDateTime = it.getLong(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_DATETIME)),
+                    preReminderEnabled = it.getInt(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_PRE_REMINDER)) == 1,
+                    createdAt = it.getLong(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_CREATED_AT))
+                )
+            }
         }
-        cursor?.close()
-        db.close()
         return reminder
     }
 
@@ -58,36 +58,50 @@ class ReminderRepository(context: Context) {
             "${ReminderDatabaseHelper.COLUMN_DATETIME} >= ?", arrayOf(now.toString()),
             null, null, "${ReminderDatabaseHelper.COLUMN_DATETIME} ASC"
         )
-        
-        if (cursor != null && cursor.moveToFirst()) {
-            val idIdx = cursor.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_ID)
-            val titleIdx = cursor.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_TITLE)
-            val descIdx = cursor.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_DESCRIPTION)
-            val dtIdx = cursor.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_DATETIME)
-            val preIdx = cursor.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_PRE_REMINDER)
-            val createdIdx = cursor.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_CREATED_AT)
-
-            do {
+        cursor?.use {
+            while (it.moveToNext()) {
                 list.add(
                     ReminderModel(
-                        id = cursor.getInt(idIdx),
-                        title = cursor.getString(titleIdx),
-                        description = cursor.getString(descIdx),
-                        eventDateTime = cursor.getLong(dtIdx),
-                        preReminderEnabled = cursor.getInt(preIdx) == 1,
-                        createdAt = cursor.getLong(createdIdx)
+                        id = it.getInt(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_ID)),
+                        title = it.getString(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_TITLE)),
+                        description = it.getString(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_DESCRIPTION)),
+                        eventDateTime = it.getLong(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_DATETIME)),
+                        preReminderEnabled = it.getInt(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_PRE_REMINDER)) == 1,
+                        createdAt = it.getLong(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_CREATED_AT))
                     )
                 )
-            } while (cursor.moveToNext())
+            }
         }
-        cursor?.close()
-        db.close()
         return list
     }
 
     fun deleteReminder(id: Int) {
         val db = dbHelper.writableDatabase
         db.delete(ReminderDatabaseHelper.TABLE_REMINDERS, "${ReminderDatabaseHelper.COLUMN_ID}=?", arrayOf(id.toString()))
-        db.close()
+    }
+
+    fun getAllReminders(): List<ReminderModel> {
+        val list = mutableListOf<ReminderModel>()
+        val db = dbHelper.readableDatabase
+        val cursor = db.query(
+            ReminderDatabaseHelper.TABLE_REMINDERS, null,
+            null, null, null, null,
+            "${ReminderDatabaseHelper.COLUMN_DATETIME} ASC"
+        )
+        cursor?.use {
+            while (it.moveToNext()) {
+                list.add(
+                    ReminderModel(
+                        id = it.getInt(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_ID)),
+                        title = it.getString(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_TITLE)),
+                        description = it.getString(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_DESCRIPTION)),
+                        eventDateTime = it.getLong(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_DATETIME)),
+                        preReminderEnabled = it.getInt(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_PRE_REMINDER)) == 1,
+                        createdAt = it.getLong(it.getColumnIndexOrThrow(ReminderDatabaseHelper.COLUMN_CREATED_AT))
+                    )
+                )
+            }
+        }
+        return list
     }
 }
