@@ -26,6 +26,39 @@ sealed class ParsedCommand {
     object ReadClipboard : ParsedCommand()
     object FindMyPhone : ParsedCommand()
     object TakeSelfie : ParsedCommand()
+
+    // ═══ NEW FEATURES (5 High-Value Additions) ═══
+    // 1. Calendar & Events
+    object ViewCalendar : ParsedCommand()
+    data class CreateEvent(val title: String, val timeInMillis: Long) : ParsedCommand()
+    object GetNextEvent : ParsedCommand()
+
+    // 2. Media Controls
+    data class MediaControl(val action: String) : ParsedCommand() // play, pause, next, previous
+    data class SetBrightness(val level: Int) : ParsedCommand() // 0-100
+    object Screenshot : ParsedCommand()
+
+    // 3. Read Messages/Notifications
+    data class ReadMessages(val appName: String?) : ParsedCommand() // null = all messages
+    object ReadNotifications : ParsedCommand()
+
+    // 4. Quick Notes
+    data class CreateNote(val content: String) : ParsedCommand()
+
+    // 5. Calculator & Converter
+    data class Calculate(val expression: String) : ParsedCommand()
+    data class Convert(val amount: Double, val fromUnit: String, val toUnit: String) : ParsedCommand()
+
+    // ═══ SMART APP ACTIONS ═══
+    data class SendWhatsApp(val contactName: String, val message: String) : ParsedCommand()
+    data class SearchOnApp(val appName: String, val query: String) : ParsedCommand()
+    data class UpiPayment(val upiId: String?, val amount: String?, val note: String?) : ParsedCommand()
+    data class PlayOnSpotify(val query: String) : ParsedCommand()
+    data class BookRide(val destination: String, val app: String?) : ParsedCommand()
+    data class OrderFood(val restaurant: String?, val app: String?) : ParsedCommand()
+    data class ShareText(val text: String, val app: String?) : ParsedCommand()
+    data class OpenProfile(val platform: String, val username: String) : ParsedCommand()
+
     object Unknown : ParsedCommand()
 }
 
@@ -504,6 +537,284 @@ object CommandParser {
         val settingsRegex = Regex("\\b(settings|preferences|configuration)\\b|\\b(open|show)\\b.*\\b(settings)\\b")
         if (settingsRegex.containsMatchIn(text)) return ParsedCommand.OpenSettings
 
+        // ═══════════════════════════════════════════════════════════════════════
+        // NEW FEATURES - 5 High-Value Additions
+        // ═══════════════════════════════════════════════════════════════════════
+
+        // ─── 1. CALENDAR & EVENTS ────────────────────────────────────────────
+        val viewCalendarRegex = Regex("\\b(show|view|check|what's on|open)\\b.*\\b(calendar|schedule|agenda|appointments|meetings)\\b|\\b(calendar|schedule|agenda)\\b")
+        if (viewCalendarRegex.containsMatchIn(text)) return ParsedCommand.ViewCalendar
+
+        val nextEventRegex = Regex("\\b(next|upcoming)\\b.*\\b(event|meeting|appointment)\\b|what('?s| is) (next|my next|up next)")
+        if (nextEventRegex.containsMatchIn(text)) return ParsedCommand.GetNextEvent
+
+        // Create calendar event: "schedule meeting tomorrow at 3pm", "add event next Monday"
+        val createEventRegex = Regex("^(schedule|create|add|make|set up)\\s+(an?\\s+)?(event|meeting|appointment)\\s+(.+)$")
+        val eventMatch = createEventRegex.find(text)
+        if (eventMatch != null) {
+            val eventDetails = eventMatch.groupValues[4].trim()
+            // Reuse the reminder time parsing logic since it's already comprehensive
+            var targetTime = 0L
+            val now = System.currentTimeMillis()
+            val calendar = java.util.Calendar.getInstance()
+
+            // Try to parse time from event details (reuse reminder logic)
+            val relativeRegex = Regex("(?:in|after)\\s+(\\d+)\\s*(min(?:ute)?s?|hr|hour?s?|day?s?)", RegexOption.IGNORE_CASE)
+            val relMatch = relativeRegex.find(eventDetails)
+            if (relMatch != null) {
+                val amount = relMatch.groupValues[1].toLongOrNull() ?: 0L
+                val unit = relMatch.groupValues[2].lowercase()
+                val millis = when {
+                    unit.startsWith("min") -> amount * 60_000L
+                    unit.startsWith("h")   -> amount * 3_600_000L
+                    unit.startsWith("d")   -> amount * 86_400_000L
+                    else -> 0L
+                }
+                if (millis > 0L) targetTime = now + millis
+            }
+
+            // Try "tomorrow at X" or "today at X"
+            if (targetTime == 0L) {
+                val tomorrowRegex = Regex("tomorrow\\s+(?:at\\s+)?(1[0-2]|0?[1-9])(?::([0-5]\\d))?\\s*(am|pm)?", RegexOption.IGNORE_CASE)
+                val todayAtRegex  = Regex("(?:today\\s+)?at\\s+(1[0-2]|0?[1-9]|2[0-3])(?::([0-5]\\d))?\\s*(am|pm)?", RegexOption.IGNORE_CASE)
+
+                val tomorrowM = tomorrowRegex.find(eventDetails)
+                val todayM = todayAtRegex.find(eventDetails)
+
+                if (tomorrowM != null) {
+                    calendar.add(java.util.Calendar.DAY_OF_MONTH, 1)
+                    var h = tomorrowM.groupValues[1].toInt()
+                    val m = if (tomorrowM.groupValues[2].isNotEmpty()) tomorrowM.groupValues[2].toInt() else 0
+                    val ap = tomorrowM.groupValues[3].lowercase()
+                    if (ap == "pm" && h < 12) h += 12
+                    if (ap == "am" && h == 12) h = 0
+                    if (ap.isEmpty() && h in 1..8) h += 12
+                    calendar.set(java.util.Calendar.HOUR_OF_DAY, h)
+                    calendar.set(java.util.Calendar.MINUTE, m)
+                    calendar.set(java.util.Calendar.SECOND, 0)
+                    targetTime = calendar.timeInMillis
+                } else if (todayM != null) {
+                    var h = todayM.groupValues[1].toInt()
+                    val m = if (todayM.groupValues[2].isNotEmpty()) todayM.groupValues[2].toInt() else 0
+                    val ap = todayM.groupValues[3].lowercase()
+                    if (ap == "pm" && h < 12) h += 12
+                    if (ap == "am" && h == 12) h = 0
+                    if (ap.isEmpty() && h in 1..8) h += 12
+                    calendar.set(java.util.Calendar.HOUR_OF_DAY, h)
+                    calendar.set(java.util.Calendar.MINUTE, m)
+                    calendar.set(java.util.Calendar.SECOND, 0)
+                    if (calendar.timeInMillis < now) calendar.add(java.util.Calendar.DAY_OF_MONTH, 1)
+                    targetTime = calendar.timeInMillis
+                }
+            }
+
+            // Default to 1 hour from now if no time found
+            if (targetTime == 0L) targetTime = now + 3_600_000L
+
+            return ParsedCommand.CreateEvent(eventDetails, targetTime)
+        }
+
+        // ─── 2. MEDIA CONTROLS ───────────────────────────────────────────────
+        val mediaControlRegex = Regex("\\b(play|pause|resume|stop|next|skip|previous|back)\\b.*\\b(song|music|track|video|media)?\\b|^(play|pause|resume|next|skip|previous)$")
+        if (mediaControlRegex.containsMatchIn(text)) {
+            val action = when {
+                text.contains("pause") || text.contains("stop") -> "pause"
+                text.contains("play") || text.contains("resume") -> "play"
+                text.contains("next") || text.contains("skip") -> "next"
+                text.contains("previous") || text.contains("back") -> "previous"
+                else -> "play"
+            }
+            // Don't intercept "play X on youtube" or "play X music" queries
+            if (!text.contains("youtube") && !text.matches(Regex("play\\s+.+\\s+(on|in|music|song)"))) {
+                return ParsedCommand.MediaControl(action)
+            }
+        }
+
+        val brightnessRegex = Regex("\\b(brightness|screen brightness|display brightness)\\b|\\b(increase|decrease|set|adjust)\\b.*\\b(brightness)\\b")
+        if (brightnessRegex.containsMatchIn(text)) {
+            val level = when {
+                text.contains("max") || text.contains("full") || text.contains("100") -> 100
+                text.contains("min") || text.contains("low") || text.contains("dim") -> 10
+                text.contains("medium") || text.contains("50") -> 50
+                text.contains("increase") || text.contains("up") -> 75
+                text.contains("decrease") || text.contains("down") -> 25
+                else -> {
+                    // Try to extract percentage
+                    val numRegex = Regex("(\\d+)\\s*%?")
+                    val match = numRegex.find(text)
+                    match?.groupValues?.get(1)?.toIntOrNull()?.coerceIn(0, 100) ?: 50
+                }
+            }
+            return ParsedCommand.SetBrightness(level)
+        }
+
+        val screenshotRegex = Regex("\\b(take|capture|grab|get)\\b.*\\b(screenshot|screen shot|screen capture|screen grab)\\b|^screenshot$")
+        if (screenshotRegex.containsMatchIn(text)) return ParsedCommand.Screenshot
+
+        // ─── 3. READ MESSAGES/NOTIFICATIONS ──────────────────────────────────
+        val readMessagesRegex = Regex("\\b(read|check|show)\\b.*\\b(messages|texts|sms)\\b|\\bmessages\\b")
+        if (readMessagesRegex.containsMatchIn(text)) {
+            // Check for app-specific: "read whatsapp messages"
+            val appName = when {
+                text.contains("whatsapp") -> "whatsapp"
+                text.contains("telegram") -> "telegram"
+                text.contains("sms") || text.contains("text") -> "sms"
+                else -> null
+            }
+            return ParsedCommand.ReadMessages(appName)
+        }
+
+        val readNotificationsRegex = Regex("\\b(read|check|show|what are|list)\\b.*\\b(notifications|alerts)\\b|^notifications$")
+        if (readNotificationsRegex.containsMatchIn(text)) return ParsedCommand.ReadNotifications
+
+        // ─── 4. QUICK NOTES ──────────────────────────────────────────────────
+        val noteRegex = Regex("^(note|create note|make note|add note|write note|note to self|remember this|jot down|write down)\\s+(.+)$")
+        val noteMatch = noteRegex.find(text)
+        if (noteMatch != null) {
+            val content = noteMatch.groupValues[2].trim()
+            if (content.isNotEmpty()) return ParsedCommand.CreateNote(content)
+        }
+
+        // ─── 5. CALCULATOR & CONVERTER ───────────────────────────────────────
+        // Calculator: "what's 15% of 250", "calculate 25 + 37", "15 times 8"
+        val calcRegex = Regex("\\b(calculate|compute|what('?s| is))\\b.*|^\\d+\\s*[+\\-*/×÷]\\s*\\d+")
+        if (calcRegex.containsMatchIn(text)) {
+            return ParsedCommand.Calculate(text)
+        }
+
+        // Converter: "convert 50 USD to INR", "how many km in 10 miles"
+        val convertRegex = Regex("\\b(convert|change)\\s+(\\d+(?:\\.\\d+)?)\\s+(\\w+)\\s+(?:to|into)\\s+(\\w+)\\b|\\bhow\\s+many\\s+(\\w+)\\s+in\\s+(\\d+(?:\\.\\d+)?)\\s+(\\w+)\\b")
+        val convertMatch = convertRegex.find(text)
+        if (convertMatch != null) {
+            val groups = convertMatch.groupValues
+            if (groups[2].isNotEmpty()) {
+                // Format: "convert 50 USD to INR"
+                val amount = groups[2].toDoubleOrNull() ?: 0.0
+                val from = groups[3]
+                val to = groups[4]
+                return ParsedCommand.Convert(amount, from, to)
+            } else if (groups[6].isNotEmpty()) {
+                // Format: "how many km in 10 miles"
+                val amount = groups[6].toDoubleOrNull() ?: 0.0
+                val from = groups[7]
+                val to = groups[5]
+                return ParsedCommand.Convert(amount, from, to)
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+
+        // ═══ SMART APP ACTIONS - Parsing ═══════════════════════════════════════
+
+        // WhatsApp message: "send whatsapp to Mom saying I'll be late" / "whatsapp Mom hello" / "message Mom on whatsapp"
+        val whatsappRegex = Regex(
+            "(?:send\\s+(?:a\\s+)?whatsapp\\s+(?:message\\s+)?to\\s+(.+?)\\s+(?:saying|that|with message|as)\\s+(.+))|" +
+            "(?:whatsapp\\s+(.+?)\\s+(?:saying|that)?\\s*(.+))|" +
+            "(?:message\\s+(.+?)\\s+on\\s+whatsapp\\s*(?:saying|that)?\\s*(.*))",
+            RegexOption.IGNORE_CASE
+        )
+        val waMatch = whatsappRegex.find(text)
+        if (waMatch != null) {
+            val g = waMatch.groupValues
+            val contact = (g[1].ifEmpty { g[3].ifEmpty { g[5] } }).trim()
+            val msg = (g[2].ifEmpty { g[4].ifEmpty { g[6] } }).trim()
+            if (contact.isNotEmpty()) {
+                return ParsedCommand.SendWhatsApp(contact, msg)
+            }
+        }
+
+        // Search on App: "search iPhone on Amazon" / "search shoes on Flipkart" / "find pizza on Swiggy"
+        val searchAppRegex = Regex(
+            "(?:search|find|look for|look up)\\s+(.+?)\\s+(?:on|in)\\s+(amazon|flipkart|swiggy|zomato|google|myntra|meesho|ajio)",
+            RegexOption.IGNORE_CASE
+        )
+        val searchAppMatch = searchAppRegex.find(text)
+        if (searchAppMatch != null) {
+            val query = searchAppMatch.groupValues[1].trim()
+            val appName = searchAppMatch.groupValues[2].trim()
+            if (query.isNotEmpty()) {
+                return ParsedCommand.SearchOnApp(appName, query)
+            }
+        }
+
+        // UPI Payment: "pay 500 to rahul@upi" / "pay Rahul 500 on GPay"
+        val upiRegex = Regex(
+            "(?:pay|send)\\s+(?:(?:rs\\.?|₹)?\\s*(\\d+)\\s+to\\s+(.+?)(?:\\s+(?:on|via|using)\\s+\\w+)?|" +
+            "(.+?)\\s+(?:rs\\.?|₹)?\\s*(\\d+)\\s*(?:on|via|using)?\\s*(?:gpay|phonpe|paytm|upi)?)",
+            RegexOption.IGNORE_CASE
+        )
+        val upiMatch = upiRegex.find(text)
+        if (upiMatch != null && (text.contains("pay") || text.contains("upi") || text.contains("gpay") || text.contains("phonpe") || text.contains("paytm"))) {
+            val g = upiMatch.groupValues
+            val amount = g[1].ifEmpty { g[4] }.trim()
+            val upiIdOrName = g[2].ifEmpty { g[3] }.trim()
+            val upiId = if (upiIdOrName.contains("@")) upiIdOrName else null
+            val note = if (upiId == null) upiIdOrName else null
+            return ParsedCommand.UpiPayment(upiId, amount.ifEmpty { null }, note)
+        }
+
+        // Play on Spotify: "play Arijit Singh on Spotify"
+        val spotifyRegex = Regex("(?:play|listen to)\\s+(.+?)\\s+(?:on|in)\\s+spotify", RegexOption.IGNORE_CASE)
+        val spotifyMatch = spotifyRegex.find(text)
+        if (spotifyMatch != null) {
+            val query = spotifyMatch.groupValues[1].trim()
+            if (query.isNotEmpty()) return ParsedCommand.PlayOnSpotify(query)
+        }
+
+        // Book Ride: "book uber to airport" / "book ola to office" / "book ride to mall"
+        val rideRegex = Regex(
+            "(?:book|get|call)\\s+(?:a\\s+)?(?:(uber|ola|ride|cab|taxi)\\s+to\\s+(.+)|ride\\s+to\\s+(.+?)\\s*(?:on|via|using)\\s+(uber|ola))",
+            RegexOption.IGNORE_CASE
+        )
+        val rideMatch = rideRegex.find(text)
+        if (rideMatch != null) {
+            val g = rideMatch.groupValues
+            val app = g[1].ifEmpty { g[4] }.trim().let { if (it == "ride" || it == "cab" || it == "taxi") null else it }
+            val destination = g[2].ifEmpty { g[3] }.trim()
+            if (destination.isNotEmpty()) return ParsedCommand.BookRide(destination, app)
+        }
+
+        // Order Food: "order from Swiggy" / "order food from Zomato" / "order pizza"
+        val orderRegex = Regex(
+            "(?:order|get)\\s+(?:(?:food|something)?\\s*(?:from|on|via)\\s+(swiggy|zomato)|(.+?)\\s+(?:from|on|via)\\s+(swiggy|zomato)|(.+))",
+            RegexOption.IGNORE_CASE
+        )
+        val orderMatch = orderRegex.find(text)
+        if (orderMatch != null && (text.contains("order") || text.contains("swiggy") || text.contains("zomato"))) {
+            val g = orderMatch.groupValues
+            val app = g[1].ifEmpty { g[3] }.trim().ifEmpty { null }
+            val restaurant = g[2].ifEmpty { g[4] }.trim().ifEmpty { null }
+            if (text.contains("swiggy") || text.contains("zomato") || text.startsWith("order food") || text.startsWith("order from")) {
+                return ParsedCommand.OrderFood(restaurant, app)
+            }
+        }
+
+        // Share Text: "share this to WhatsApp" / "share to Instagram"
+        val shareRegex = Regex(
+            "(?:share|send)\\s+(?:(.+?)\\s+)?(?:to|on|via)\\s+(whatsapp|instagram|telegram|twitter|facebook|x)",
+            RegexOption.IGNORE_CASE
+        )
+        val shareMatch = shareRegex.find(text)
+        if (shareMatch != null) {
+            val content = shareMatch.groupValues[1].trim().ifEmpty { "" }
+            val app = shareMatch.groupValues[2].trim()
+            return ParsedCommand.ShareText(content, app)
+        }
+
+        // Open Profile: "open @username on Instagram" / "check @elonmusk on Twitter"
+        val profileRegex = Regex(
+            "(?:open|check|visit|show|go to|see)\\s+@?(\\w+)\\s+(?:on|in)\\s+(instagram|twitter|x|facebook|youtube|linkedin)",
+            RegexOption.IGNORE_CASE
+        )
+        val profileMatch = profileRegex.find(text)
+        if (profileMatch != null) {
+            val username = profileMatch.groupValues[1].trim()
+            val platform = profileMatch.groupValues[2].trim().let { if (it.lowercase() == "x") "twitter" else it }
+            if (username.isNotEmpty()) return ParsedCommand.OpenProfile(platform, username)
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+
         // Open App (robust regex) - Moved to very end to avoid matching specific system commands
         // Matches: open whatsapp, launch spotify, start Netflix, pull up chrome
         val openRegex = Regex("^(open|launch|start|fire up|pull up|bring up|load|run)\\s+(.+?)(?:\\s+app|\\s+application)?$")
@@ -514,8 +825,6 @@ object CommandParser {
                 return ParsedCommand.OpenApp(appName)
             }
         }
-
-        return ParsedCommand.Unknown
 
         return ParsedCommand.Unknown
     }

@@ -16,15 +16,24 @@ import com.aura.mobile.aura_mobile.assistant.AssistantForegroundService
 import com.aura.mobile.aura_mobile.assistant.AlarmScheduler
 import com.aura.mobile.aura_mobile.assistant.ReminderModel
 import com.aura.mobile.aura_mobile.assistant.ReminderRepository
+import com.aura.mobile.aura_mobile.assistant.ClipboardMonitorService
+import com.aura.mobile.aura_mobile.assistant.ScreenContextAccessibilityService
+import com.aura.mobile.aura_mobile.assistant.AuraNotificationListenerService
 
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.aura.ai/memory"
     private val APP_CONTROL_CHANNEL = "com.aura.ai/app_control"
     private val ASSISTANT_STATE_CHANNEL = "com.aura.ai/assistant_state"
     private val ASSISTANT_AI_CHANNEL = "com.aura.ai/assistant_ai"
+    private val CLIPBOARD_CHANNEL = "com.aura.ai/clipboard"
+    private val SCREEN_CONTEXT_CHANNEL = "com.aura.ai/screen_context"
+    private val NOTIFICATIONS_CHANNEL = "com.aura.ai/notifications"
 
     private var assistantStateSink: EventChannel.EventSink? = null
     private var assistantAiChannel: MethodChannel? = null
+    private var clipboardChannel: MethodChannel? = null
+    private var screenContextChannel: MethodChannel? = null
+    private var notificationsChannel: MethodChannel? = null
 
     private val assistantStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -298,6 +307,151 @@ class MainActivity: FlutterActivity() {
                     intent.putExtra("mode", mode)
                     sendBroadcast(intent)
                     result.success("Gesture mode set to $mode")
+                }
+                // ═══ SMART APP ACTIONS ═══
+                "sendWhatsApp" -> {
+                    val contact = call.argument<String>("contact") ?: ""
+                    val message = call.argument<String>("message") ?: ""
+                    val deviceControl = com.aura.mobile.aura_mobile.assistant.DeviceControlService(this@MainActivity)
+                    deviceControl.sendWhatsAppMessage(contact, message)
+                    result.success("WhatsApp message initiated")
+                }
+                "searchOnApp" -> {
+                    val appName = call.argument<String>("appName") ?: ""
+                    val query = call.argument<String>("query") ?: ""
+                    val deviceControl = com.aura.mobile.aura_mobile.assistant.DeviceControlService(this@MainActivity)
+                    deviceControl.searchOnApp(appName, query)
+                    result.success("Search initiated on $appName")
+                }
+                "makeUpiPayment" -> {
+                    val upiId = call.argument<String>("upiId")
+                    val amount = call.argument<String>("amount")
+                    val note = call.argument<String>("note")
+                    val deviceControl = com.aura.mobile.aura_mobile.assistant.DeviceControlService(this@MainActivity)
+                    deviceControl.openUpiPayment(upiId, amount, note)
+                    result.success("UPI payment initiated")
+                }
+                "playOnSpotify" -> {
+                    val query = call.argument<String>("query") ?: ""
+                    val deviceControl = com.aura.mobile.aura_mobile.assistant.DeviceControlService(this@MainActivity)
+                    deviceControl.playOnSpotify(query)
+                    result.success("Spotify playback initiated")
+                }
+                "bookRide" -> {
+                    val destination = call.argument<String>("destination") ?: ""
+                    val app = call.argument<String>("app")
+                    val deviceControl = com.aura.mobile.aura_mobile.assistant.DeviceControlService(this@MainActivity)
+                    deviceControl.bookRide(destination, app)
+                    result.success("Ride booking initiated")
+                }
+                "orderFood" -> {
+                    val restaurant = call.argument<String>("restaurant")
+                    val app = call.argument<String>("app")
+                    val deviceControl = com.aura.mobile.aura_mobile.assistant.DeviceControlService(this@MainActivity)
+                    deviceControl.orderFood(restaurant, app)
+                    result.success("Food order initiated")
+                }
+                "shareText" -> {
+                    val text = call.argument<String>("text") ?: ""
+                    val app = call.argument<String>("app")
+                    val deviceControl = com.aura.mobile.aura_mobile.assistant.DeviceControlService(this@MainActivity)
+                    deviceControl.shareText(text, app)
+                    result.success("Share initiated")
+                }
+                "openProfile" -> {
+                    val platform = call.argument<String>("platform") ?: ""
+                    val username = call.argument<String>("username") ?: ""
+                    val deviceControl = com.aura.mobile.aura_mobile.assistant.DeviceControlService(this@MainActivity)
+                    deviceControl.openProfile(platform, username)
+                    result.success("Profile opened")
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // ═══ Smart Clipboard AI Channel ═══
+        clipboardChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CLIPBOARD_CHANNEL)
+        clipboardChannel!!.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "enableClipboardMonitor" -> {
+                    val enable = call.arguments as? Boolean ?: true
+                    if (enable) {
+                        ClipboardMonitorService.start(this@MainActivity) { content, contentType ->
+                            runOnUiThread {
+                                clipboardChannel?.invokeMethod("onClipboardContent", mapOf(
+                                    "content" to content,
+                                    "contentType" to contentType
+                                ))
+                            }
+                        }
+                    } else {
+                        ClipboardMonitorService.stop(this@MainActivity)
+                    }
+                    result.success(true)
+                }
+                "isClipboardMonitorActive" -> {
+                    result.success(ClipboardMonitorService.isActive)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // ═══ Screen Context AI Channel ═══
+        screenContextChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SCREEN_CONTEXT_CHANNEL)
+        screenContextChannel!!.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getScreenContent" -> {
+                    result.success(ScreenContextAccessibilityService.currentScreenContent)
+                }
+                "isAccessibilityEnabled" -> {
+                    result.success(ScreenContextAccessibilityService.isServiceEnabled(this@MainActivity))
+                }
+                "openAccessibilitySettings" -> {
+                    try {
+                        val intent = Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("FAILED", e.message, null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // ═══ Smart Notification Digest Channel ═══
+        notificationsChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, NOTIFICATIONS_CHANNEL)
+        notificationsChannel!!.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isNotificationListenerEnabled" -> {
+                    result.success(AuraNotificationListenerService.isServiceEnabled(this@MainActivity))
+                }
+                "openNotificationListenerSettings" -> {
+                    try {
+                        val intent = Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("FAILED", e.message, null)
+                    }
+                }
+                "getRecentNotifications" -> {
+                    val sinceMillis = when (val arg = call.argument<Any>("sinceMillis")) {
+                        is Long -> arg
+                        is Int -> arg.toLong()
+                        is Number -> arg.toLong()
+                        else -> System.currentTimeMillis() - 24 * 60 * 60 * 1000L // default: last 24h
+                    }
+                    result.success(AuraNotificationListenerService.getRecentNotifications(sinceMillis))
+                }
+                "getGroupedNotifications" -> {
+                    result.success(AuraNotificationListenerService.getGroupedByApp())
+                }
+                "clearNotifications" -> {
+                    AuraNotificationListenerService.clearAll()
+                    result.success(true)
                 }
                 else -> result.notImplemented()
             }

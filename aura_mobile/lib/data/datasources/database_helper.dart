@@ -20,7 +20,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -60,6 +60,80 @@ class DatabaseHelper {
         FOREIGN KEY(documentId) REFERENCES documents(id) ON DELETE CASCADE
       )
     ''');
+
+    // Study Buddy tables
+    await _createStudyTables(db);
+  }
+
+  Future<void> _createStudyTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS flashcard_decks(
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        sourceDocumentId TEXT,
+        description TEXT,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        FOREIGN KEY(sourceDocumentId) REFERENCES documents(id) ON DELETE SET NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS flashcards(
+        id TEXT PRIMARY KEY,
+        deckId TEXT NOT NULL,
+        front TEXT NOT NULL,
+        back TEXT NOT NULL,
+        topic TEXT,
+        difficulty INTEGER DEFAULT 2,
+        easeFactor REAL DEFAULT 2.5,
+        interval INTEGER DEFAULT 0,
+        repetitions INTEGER DEFAULT 0,
+        nextReviewDate INTEGER,
+        createdAt INTEGER NOT NULL,
+        FOREIGN KEY(deckId) REFERENCES flashcard_decks(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS quiz_sessions(
+        id TEXT PRIMARY KEY,
+        deckId TEXT NOT NULL,
+        quizType TEXT NOT NULL,
+        totalQuestions INTEGER DEFAULT 0,
+        correctAnswers INTEGER DEFAULT 0,
+        wrongAnswers INTEGER DEFAULT 0,
+        startedAt INTEGER NOT NULL,
+        completedAt INTEGER,
+        FOREIGN KEY(deckId) REFERENCES flashcard_decks(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS quiz_answers(
+        id TEXT PRIMARY KEY,
+        sessionId TEXT NOT NULL,
+        flashcardId TEXT NOT NULL,
+        userAnswer TEXT NOT NULL,
+        isCorrect INTEGER DEFAULT 0,
+        timeTakenMs INTEGER DEFAULT 0,
+        answeredAt INTEGER NOT NULL,
+        FOREIGN KEY(sessionId) REFERENCES quiz_sessions(id) ON DELETE CASCADE,
+        FOREIGN KEY(flashcardId) REFERENCES flashcards(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS exam_schedules(
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        deckId TEXT,
+        examDate INTEGER NOT NULL,
+        notes TEXT,
+        createdAt INTEGER NOT NULL,
+        FOREIGN KEY(deckId) REFERENCES flashcard_decks(id) ON DELETE SET NULL
+      )
+    ''');
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -94,6 +168,10 @@ class DatabaseHelper {
           FOREIGN KEY(documentId) REFERENCES documents(id) ON DELETE CASCADE
         )
       ''');
+    }
+
+    if (oldVersion < 4) {
+      await _createStudyTables(db);
     }
   }
 }

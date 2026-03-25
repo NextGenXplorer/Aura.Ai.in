@@ -10,6 +10,14 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
 import 'package:aura_mobile/presentation/widgets/code_element_builder.dart';
+import 'package:aura_mobile/presentation/pages/camera_scan_screen.dart';
+import 'package:aura_mobile/presentation/pages/persona_selector_screen.dart';
+import 'package:aura_mobile/presentation/providers/persona_provider.dart';
+import 'package:aura_mobile/presentation/widgets/proactive_nudge_card.dart';
+import 'package:aura_mobile/core/services/proactive_engine.dart';
+import 'package:aura_mobile/presentation/providers/study_provider.dart';
+import 'package:aura_mobile/presentation/pages/study_dashboard_screen.dart';
+import 'package:aura_mobile/presentation/pages/flashcard_review_screen.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
@@ -27,6 +35,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   // Tracks which email draft is in edit mode: key = message index, value = TextEditingController
   final Map<int, TextEditingController> _emailEditControllers = {};
 
+  // Proactive AI state
+  ProactiveNudge? _activeNudge;
+  bool _nudgeChecked = false;
+
   @override
   void initState() {
     super.initState();
@@ -34,6 +46,65 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       // Native voice-initiated email drafts are now handled by the orchestrator
       // via the emailDraft intent — no Flutter-side pending state required.
     });
+    _checkProactiveNudge();
+  }
+
+  Future<void> _checkProactiveNudge() async {
+    if (_nudgeChecked) return;
+    _nudgeChecked = true;
+    try {
+      // Gather study state for nudge engine
+      int dueCards = 0;
+      int upcomingExams = 0;
+      int closestExamDays = 999;
+      int totalDecks = 0;
+
+      try {
+        final studyState = ref.read(studyProvider);
+        dueCards = studyState.reviewQueue.length;
+        upcomingExams = studyState.upcomingExams.length;
+        totalDecks = studyState.decks.length;
+        if (studyState.upcomingExams.isNotEmpty) {
+          closestExamDays = studyState.upcomingExams.first.daysRemaining;
+        }
+      } catch (_) {
+        // Study provider may not be loaded yet
+      }
+
+      final nudge = await ProactiveEngine.generateNudge(
+        dueCards: dueCards,
+        upcomingExams: upcomingExams,
+        closestExamDays: closestExamDays,
+        totalDecks: totalDecks,
+      );
+
+      if (nudge != null && mounted) {
+        setState(() => _activeNudge = nudge);
+      }
+    } catch (e) {
+      debugPrint('Proactive nudge check failed: $e');
+    }
+  }
+
+  void _handleNudgeAction(ProactiveNudge nudge) {
+    setState(() => _activeNudge = null);
+    switch (nudge.action) {
+      case NudgeAction.openStudy:
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const StudyDashboardScreen()));
+        break;
+      case NudgeAction.startReview:
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const StudyDashboardScreen()));
+        break;
+      case NudgeAction.startQuiz:
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const StudyDashboardScreen()));
+        break;
+      case NudgeAction.openScan:
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const CameraScanScreen()));
+        break;
+      case NudgeAction.openChat:
+      case NudgeAction.dismiss:
+        break;
+    }
   }
 
 
@@ -76,8 +147,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         _controller.clear();
       }
     });
-    final modelState = ref.watch(modelSelectorProvider);
-    // final isModelLoading = chatState.isModelLoading || modelState.activeModelId == null; // Redundant, already defined above
 
     return Scaffold(
       backgroundColor: const Color(0xFF0a0a0c), // Obsidian - Keep opaque for normal app use
@@ -163,6 +232,46 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         ),
         actions: [
+            // Persona selector button
+            Padding(
+              padding: const EdgeInsets.only(right: 4.0),
+              child: Consumer(
+                builder: (context, ref, _) {
+                  final persona = ref.watch(personaProvider).activePersona;
+                  return GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const PersonaSelectorScreen()),
+                      );
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: persona.accentColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: persona.accentColor.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(persona.emoji, style: const TextStyle(fontSize: 14)),
+                          const SizedBox(width: 4),
+                          Text(
+                            persona.name,
+                            style: GoogleFonts.outfit(
+                              color: persona.accentColor,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
             Padding(
                 padding: const EdgeInsets.only(right: 8.0),
                  child: CircleAvatar(
@@ -198,6 +307,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ),
       body: Column(
         children: [
+          // Proactive AI Nudge Card
+          if (_activeNudge != null)
+            ProactiveNudgeCard(
+              nudge: _activeNudge!,
+              onAction: () => _handleNudgeAction(_activeNudge!),
+              onDismiss: () => setState(() => _activeNudge = null),
+            ),
+
           Expanded(
             child: Stack(
               children: [
@@ -265,7 +382,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                  // Remove "Body:" prefix if present (legacy format)
                                  parsedBody = afterSubject.replaceFirst(RegExp(r'^Body:\s*', caseSensitive: false), '').trim();
 
-                                 if (parsedSubject != null || parsedBody!.isNotEmpty) {
+                                 if (parsedSubject != null || parsedBody.isNotEmpty) {
                                      isEmailDraft = true;
                                      // Blank out the main bubble content — the card shows everything
                                      displayContent = '';
@@ -456,7 +573,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               },
                           )
                         else
-                          const Icon(Icons.add, color: Colors.white54),
+                          IconButton(
+                            icon: const Icon(Icons.document_scanner_rounded, color: Color(0xFFc69c3a), size: 20),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                            tooltip: 'Scan Image',
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(builder: (_) => const CameraScanScreen()),
+                              );
+                            },
+                          ),
                         
                         Expanded(
                           child: TextField(
@@ -731,12 +859,4 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       });
     }
   }
-
-  String? _encodeQueryParameters(Map<String, String> params) {
-    return params.entries
-        .map((MapEntry<String, String> e) =>
-            '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}')
-        .join('&');
-  }
-
 }

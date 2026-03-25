@@ -1,104 +1,212 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
+import 'package:disk_space_2/disk_space_2.dart';
 import 'package:aura_mobile/domain/entities/model_info.dart';
+import 'package:aura_mobile/core/errors/app_exceptions.dart';
+import 'package:aura_mobile/core/services/error_handler_service.dart';
 
 class ModelManager {
+  final ErrorHandlerService _errorHandler = ErrorHandlerService();
+
+  // GGUF file magic bytes for validation
+  static const int _ggufMagic = 0x46554747; // 'GGUF' in little-endian
   /// Get list of all downloaded models
   Future<List<String>> getDownloadedModels() async {
-    try {
-      final docsDir = await getApplicationDocumentsDirectory();
-      final modelFiles = await Directory(docsDir.path)
-          .list()
-          .where((entity) => entity is File && entity.path.endsWith('.gguf'))
-          .map((entity) => entity.path.split('/').last.split('\\\\').last)
-          .toList();
-      
-      return modelFiles;
-    } catch (e) {
-      print('Error getting downloaded models: $e');
-      return [];
-    }
+    return await _errorHandler.safeExecute(
+      operation: () async {
+        final docsDir = await getApplicationDocumentsDirectory();
+        final modelFiles = await Directory(docsDir.path)
+            .list()
+            .where((entity) => entity is File && entity.path.endsWith('.gguf'))
+            .map((entity) {
+              // Platform-agnostic path splitting
+              final path = entity.path;
+              return path.substring(path.lastIndexOf(Platform.pathSeparator) + 1);
+            })
+            .toList();
+
+        return modelFiles;
+      },
+      operationName: 'Get downloaded models',
+      onError: (error) {
+        _errorHandler.logWarning('Failed to get downloaded models: $error');
+        return <String>[];
+      },
+    ) ?? [];
   }
 
   /// Check if a specific model is downloaded and intact
   Future<bool> isModelDownloaded(String modelId) async {
-    final model = modelCatalog.firstWhere((m) => m.id == modelId);
-    final docsDir = await getApplicationDocumentsDirectory();
-    final modelPath = '${docsDir.path}/${model.fileName}';
-    final file = File(modelPath);
+    try {
+      final model = modelCatalog.firstWhere((m) => m.id == modelId);
+      final docsDir = await getApplicationDocumentsDirectory();
+      final modelPath = '${docsDir.path}${Platform.pathSeparator}${model.fileName}';
+      final file = File(modelPath);
 
-    if (!await file.exists()) {
+      if (!await file.exists()) {
+        return false;
+      }
+
+      final fileSize = await file.length();
+
+      // Check size (allow 1% variance for metadata differences)
+      if (fileSize < (model.sizeBytes * 0.99)) {
+        _errorHandler.logWarning(
+          'Model ${model.id} size mismatch: Expected ${model.sizeBytes}, got $fileSize',
+        );
+        return false;
+      }
+
+      // Validate GGUF format by checking magic bytes
+      if (!await _validateGGUFFormat(file)) {
+        _errorHandler.logWarning('Model ${model.id} failed GGUF format validation');
+        return false;
+      }
+
+      return true;
+    } catch (e) {
+      _errorHandler.logWarning('Error checking model download status: $e');
       return false;
     }
+  }
 
-    final fileSize = await file.length();
-    // Allow 1% variance or just check if it's at least the expected size?
-    // Given HTTP downloads can sometimes be slightly different due to compression or metadata, 
-    // but GGUF should be exact. Let's check if it's AT LEAST the expected size.
-    // Actually, incomplete downloads are usually smaller. 
-    // Let's use a 99% threshold to be safe against minor differences, but ideally it should be exact.
-    if (fileSize < (model.sizeBytes * 0.99)) {
-       print('Model ${model.id} corrupted: Expected ${model.sizeBytes}, got $fileSize');
-       return false;
+  /// Validate GGUF file format by checking magic bytes
+  Future<bool> _validateGGUFFormat(File file) async {
+    try {
+      final bytes = await file.openRead(0, 4).first;
+      if (bytes.length < 4) return false;
+
+      // GGUF magic is 'GGUF' (0x47475546 in big-endian, 0x46554747 in little-endian)
+      final magic = ByteData.sublistView(Uint8List.fromList(bytes)).getUint32(0, Endian.little);
+      return magic == _ggufMagic;
+    } catch (e) {
+      _errorHandler.logWarning('Error validating GGUF format: $e');
+      return false;
     }
-    
-    return true;
   }
 
   /// Verify model integrity and delete if corrupt
   Future<bool> verifyAndCleanupModel(String modelId) async {
-     // If file exists but isModelDownloaded returns false (due to size check), delete it.
-     final model = modelCatalog.firstWhere((m) => m.id == modelId);
-     final docsDir = await getApplicationDocumentsDirectory();
-     final modelPath = '${docsDir.path}/${model.fileName}';
-     final file = File(modelPath);
-     
-     if (await file.exists()) {
-        final fileSize = await file.length();
-        if (fileSize < (model.sizeBytes * 0.99)) {
-            print('Deleting corrupt model: ${model.id}');
-            await file.delete();
-            return false;
-        }
-        return true;
-     }
-     return false;
+    try {
+      final model = modelCatalog.firstWhere((m) => m.id == modelId);
+      final docsDir = await getApplicationDocumentsDirectory();
+      final modelPath = '${docsDir.path}${Platform.pathSeparator}${model.fileName}';
+      final file = File(modelPath);
+
+      if (!await file.exists()) {
+        return false;
+      }
+
+      final fileSize = await file.length();
+      bool isCorrupt = false;
+      String? corruptionReason;
+
+      // Check size
+      if (fileSize < (model.sizeBytes * 0.99)) {
+        isCorrupt = true;
+        corruptionReason = 'Size mismatch: expected ${model.sizeBytes}, got $fileSize';
+      }
+
+      // Check GGUF format
+      if (!isCorrupt && !await _validateGGUFFormat(file)) {
+        isCorrupt = true;
+        corruptionReason = 'Invalid GGUF format';
+      }
+
+      if (isCorrupt) {
+        _errorHandler.logWarning('Deleting corrupt model ${model.id}: $corruptionReason');
+        await file.delete();
+        return false;
+      }
+
+      return true;
+    } catch (e) {
+      _errorHandler.logWarning('Error verifying model: $e');
+      return false;
+    }
+  }
+
+  /// Check available disk space (in bytes)
+  Future<int> getAvailableDiskSpace() async {
+    try {
+      final freeSpace = await DiskSpace.getFreeDiskSpace;
+      return ((freeSpace ?? 0) * 1024 * 1024).toInt(); // Convert MB to bytes
+    } catch (e) {
+      _errorHandler.logWarning('Error checking disk space: $e');
+      return 0;
+    }
+  }
+
+  /// Validate sufficient disk space for model download
+  Future<void> validateDiskSpace(String modelId) async {
+    final model = modelCatalog.firstWhere(
+      (m) => m.id == modelId,
+      orElse: () => throw ModelException.notFound(modelId),
+    );
+
+    final availableBytes = await getAvailableDiskSpace();
+    final requiredBytes = (model.sizeBytes * 1.1).toInt(); // Add 10% buffer
+
+    if (availableBytes < requiredBytes) {
+      final availableMB = (availableBytes / (1024 * 1024)).toInt();
+      final requiredMB = (requiredBytes / (1024 * 1024)).toInt();
+      throw ModelException.insufficientSpace(model.name, requiredMB, availableMB);
+    }
   }
 
   /// Get model file path
   Future<String> getModelPath(String modelId) async {
-    final model = modelCatalog.firstWhere((m) => m.id == modelId);
+    final model = modelCatalog.firstWhere(
+      (m) => m.id == modelId,
+      orElse: () => throw ModelException.notFound(modelId),
+    );
     final docsDir = await getApplicationDocumentsDirectory();
-    return '${docsDir.path}/${model.fileName}';
+    return '${docsDir.path}${Platform.pathSeparator}${model.fileName}';
   }
 
   /// Delete a model
   Future<void> deleteModel(String modelId) async {
-    try {
-      final modelPath = await getModelPath(modelId);
-      final file = File(modelPath);
-      if (await file.exists()) {
-        await file.delete();
-      }
-    } catch (e) {
-      print('Error deleting model: $e');
-      rethrow;
-    }
+    final model = modelCatalog.firstWhere(
+      (m) => m.id == modelId,
+      orElse: () => throw ModelException.notFound(modelId),
+    );
+
+    return await _errorHandler.executeWithRetry(
+      operation: () async {
+        final modelPath = await getModelPath(modelId);
+        final file = File(modelPath);
+
+        if (await file.exists()) {
+          await file.delete();
+          _errorHandler.logInfo('Deleted model: ${model.name}');
+        } else {
+          throw ModelException.notFound(model.name);
+        }
+      },
+      operationName: 'Delete model ${model.name}',
+      maxAttempts: 2,
+    );
   }
 
   /// Get model file size
   Future<int> getModelSize(String modelId) async {
-    try {
-      final modelPath = await getModelPath(modelId);
-      final file = File(modelPath);
-      if (await file.exists()) {
-        return await file.length();
-      }
-      return 0;
-    } catch (e) {
-      print('Error getting model size: $e');
-      return 0;
-    }
+    return await _errorHandler.safeExecute(
+      operation: () async {
+        final modelPath = await getModelPath(modelId);
+        final file = File(modelPath);
+
+        if (await file.exists()) {
+          return await file.length();
+        }
+        return 0;
+      },
+      operationName: 'Get model size',
+      onError: (error) {
+        _errorHandler.logWarning('Error getting model size: $error');
+        return 0;
+      },
+    ) ?? 0;
   }
 
   /// Get total storage used by all models

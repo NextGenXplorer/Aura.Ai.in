@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:aura_mobile/presentation/providers/user_provider.dart';
+import 'package:aura_mobile/presentation/providers/persona_provider.dart';
 
 class GreetingWidget extends ConsumerWidget {
   const GreetingWidget({super.key});
@@ -60,14 +61,20 @@ class GreetingWidget extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 8),
-          Text(
-            "Ready to assist you!",
-            textAlign: TextAlign.center,
-            style: GoogleFonts.outfit(
-              fontSize: 22,
-              fontWeight: FontWeight.w300,
-              color: Colors.white70,
-            ),
+          Consumer(
+            builder: (context, ref, _) {
+              final persona = ref.watch(personaProvider).activePersona;
+              return Text(
+                persona.greeting,
+                textAlign: TextAlign.center,
+                style: GoogleFonts.outfit(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w300,
+                  color: persona.accentColor.withValues(alpha: 0.7),
+                  fontStyle: FontStyle.italic,
+                ),
+              );
+            },
           ),
         ],
       ),

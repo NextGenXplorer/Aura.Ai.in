@@ -4,6 +4,8 @@ import 'package:aura_mobile/domain/services/document_service.dart';
 import 'package:aura_mobile/core/services/voice_service.dart';
 import 'package:aura_mobile/features/orchestrator/orchestrator_service.dart';
 import 'package:aura_mobile/core/providers/ai_providers.dart';
+import 'package:aura_mobile/presentation/providers/persona_provider.dart';
+import 'package:aura_mobile/domain/services/context_builder_service.dart';
 
 import 'package:uuid/uuid.dart';
 import 'package:aura_mobile/domain/repositories/chat_history_repository.dart';
@@ -159,6 +161,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
       return;
     }
     _isProcessing = true;
+
+    // 0.5. Sync active persona system prompt
+    try {
+      final persona = _ref.read(personaProvider).activePersona;
+      final contextBuilder = _ref.read(contextBuilderServiceProvider);
+      contextBuilder.personaSystemPrompt = persona.systemPrompt;
+    } catch (_) {
+      // Persona provider may not be initialized yet
+    }
 
     // 1. Add User Message
     state = state.copyWith(

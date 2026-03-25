@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   audioplayers_windows
   connectivity_plus
   disk_space_2
+  file_selector_windows
   flutter_tts
   permission_handler_windows
   share_plus

@@ -116,6 +116,21 @@ class NotificationService {
     await _notifications.cancel(888888);
   }
 
+  /// Public API for scheduling arbitrary notifications (used by ProactiveEngine)
+  Future<void> scheduleNotification({
+    required int id,
+    required String title,
+    required String body,
+    required DateTime scheduledTime,
+  }) async {
+    await _scheduleNotification(
+      id: id,
+      title: title,
+      body: body,
+      scheduledDate: scheduledTime,
+    );
+  }
+
   // ========== PRIVATE HELPERS ==========
 
   Future<void> _scheduleNotification({

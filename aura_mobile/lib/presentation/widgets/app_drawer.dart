@@ -9,6 +9,10 @@ import 'package:aura_mobile/presentation/pages/model_selector_screen.dart';
 import 'package:aura_mobile/presentation/pages/voice_assistant_settings_page.dart';
 import 'package:intl/intl.dart'; // For date formatting
 import 'package:aura_mobile/core/providers/repository_providers.dart';
+import 'package:aura_mobile/presentation/pages/study_dashboard_screen.dart';
+import 'package:aura_mobile/presentation/pages/camera_scan_screen.dart';
+import 'package:aura_mobile/presentation/pages/persona_selector_screen.dart';
+import 'package:aura_mobile/presentation/providers/persona_provider.dart';
 
 class AppDrawer extends ConsumerWidget {
   const AppDrawer({super.key});
@@ -64,6 +68,32 @@ class AppDrawer extends ConsumerWidget {
               onTap: () {
                 // TODO: Clear chat
                 Navigator.pop(context);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.school, color: Color(0xFFc69c3a)),
+              title: Text("Study Buddy", style: GoogleFonts.outfit(color: Color(0xFFc69c3a))),
+              subtitle: Text("Flashcards, Quizzes & Exams",
+                  style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const StudyDashboardScreen()),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.document_scanner_rounded, color: Color(0xFFc69c3a)),
+              title: Text("Scan & Capture", style: GoogleFonts.outfit(color: Color(0xFFc69c3a))),
+              subtitle: Text("OCR from camera or gallery",
+                  style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const CameraScanScreen()),
+                );
               },
             ),
             ListTile(
@@ -171,6 +201,26 @@ class AppDrawer extends ConsumerWidget {
             const Divider(color: Colors.white10),
 
             // 5. Footer (Model Selector & Settings)
+            // AI Persona Selector
+            Consumer(
+              builder: (context, ref, _) {
+                final persona = ref.watch(personaProvider).activePersona;
+                return ListTile(
+                  leading: Text(persona.emoji, style: const TextStyle(fontSize: 22)),
+                  title: Text("AI Persona: ${persona.name}", style: GoogleFonts.outfit(color: persona.accentColor)),
+                  subtitle: Text(persona.description,
+                      style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11)),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.white38),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const PersonaSelectorScreen()),
+                    );
+                  },
+                );
+              },
+            ),
             ListTile(
               leading: const Icon(Icons.psychology, color: Color(0xFFc69c3a)), // Gold Icon
               title: Text("Switch Model", style: GoogleFonts.outfit(color: const Color(0xFFc69c3a))),

@@ -1,5 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:aura_mobile/domain/services/llm_intent_classifier.dart';
+import 'package:aura_mobile/data/datasources/llm_service.dart';
+import 'package:aura_mobile/core/providers/ai_providers.dart';
 
 enum IntentType {
   normalChat,
@@ -16,13 +19,60 @@ enum IntentType {
   sendSMS,
   torchControl,
   reminderSet,
-  navigation
+  navigation,
+  weatherSearch,
+
+  // ═══ NEW FEATURES (5 High-Value Additions) ═══
+  // 1. Calendar & Events
+  viewCalendar,
+  createEvent,
+  getNextEvent,
+
+  // 2. Media Controls
+  mediaControl,
+  setBrightness,
+  screenshot,
+
+  // 3. Read Messages/Notifications
+  readMessages,
+  readNotifications,
+
+  // 4. Quick Notes
+  createNote,
+
+  // 5. Calculator & Converter
+  calculate,
+  convert,
+
+  // 6. Camera/OCR Scan
+  scanImage,
+
+  // 7. Study Buddy
+  studyCreateFlashcards,
+  studyQuizMe,
+  studyReviewCards,
+  studyShowStats,
+  studyScheduleExam,
+  studyOpenDashboard,
+
+  // 8. Smart App Actions
+  sendWhatsApp,
+  searchOnApp,
+  upiPayment,
+  playOnSpotify,
+  bookRide,
+  orderFood,
+  shareContent,
+  openProfile,
 }
 
-final intentDetectionServiceProvider = Provider((ref) => IntentDetectionService());
+final intentDetectionServiceProvider = Provider((ref) {
+  final llmService = ref.watch(llmServiceProvider);
+  return IntentDetectionService(llmService: llmService);
+});
 
 /// ─────────────────────────────────────────────────────────────────────────────
-/// Rule-based Intent Detection Service
+/// Hybrid Intent Detection Service (Rule-based + LLM Fallback)
 ///
 /// Priority order (highest → lowest):
 ///  0. Greeting / very-short message  → normalChat (fast-path, no LLM needed)
@@ -38,9 +88,15 @@ final intentDetectionServiceProvider = Provider((ref) => IntentDetectionService(
 /// 10. Open App  (includes "play X in youtube" → webSearch)
 /// 11. Web Search (explicit commands + context keywords)
 /// 12. URL Scrape
-/// 13. normalChat
+/// 13. LLM Fallback (for ambiguous natural language)
+/// 14. normalChat (default)
 /// ─────────────────────────────────────────────────────────────────────────────
 class IntentDetectionService {
+  late final LLMIntentClassifier? _llmClassifier;
+
+  IntentDetectionService({LLMService? llmService}) {
+    _llmClassifier = llmService != null ? LLMIntentClassifier(llmService) : null;
+  }
 
   // ── Shared helpers ────────────────────────────────────────────────────────
 
@@ -416,9 +472,342 @@ class IntentDetectionService {
       return IntentType.urlScrape;
     }
 
-    // ── 1️⃣3️⃣  Default ───────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════
+    // NEW FEATURES - Intent Detection for 5 High-Value Additions
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // ── 📅 1. CALENDAR & EVENTS ─────────────────────────────────────────
+    if (RegExp(
+      r'\b(show|view|check|open|display)\b.*\b(calendar|schedule|agenda|appointments?|meetings?)\b|'
+      r'\b(my\s+)?(calendar|schedule|agenda)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Calendar view → viewCalendar');
+      return IntentType.viewCalendar;
+    }
+
+    if (RegExp(
+      r'\b(next|upcoming|my\s+next)\b.*\b(event|meeting|appointment)\b|'
+      r"what('?s| is)\s+(next|my\s+next|up\s+next|coming\s+up)",
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Next event query → getNextEvent');
+      return IntentType.getNextEvent;
+    }
+
+    if (RegExp(
+      r'^(schedule|create|add|make|set\s+up)\s+(an?\s+)?(event|meeting|appointment)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Create event → createEvent');
+      return IntentType.createEvent;
+    }
+
+    // ── 🎵 2. MEDIA CONTROLS ────────────────────────────────────────────
+    // Media control commands (but exclude YouTube/music search queries)
+    if (RegExp(
+      r'^\b(play|pause|resume|stop|next|skip|previous|back)\b(\s+(song|music|track|video|media))?$|'
+      r'\b(pause|resume|skip|next|previous)\s+(the\s+)?(song|music|track|video|media)\b',
+      caseSensitive: false,
+    ).hasMatch(lo) &&
+        !lo.contains('youtube') &&
+        !RegExp(r'play\s+\S+\s+(on|in|music)', caseSensitive: false).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Media control → mediaControl');
+      return IntentType.mediaControl;
+    }
+
+    if (RegExp(
+      r'\b(brightness|screen\s+brightness|display\s+brightness)\b|'
+      r'\b(increase|decrease|set|adjust|change)\b.*\b(brightness)\b|'
+      r'\b(dim|brighten)\s+(the\s+)?(screen|display)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Brightness control → setBrightness');
+      return IntentType.setBrightness;
+    }
+
+    if (RegExp(
+      r'\b(take|capture|grab|get)\b.*\b(screenshot|screen\s+shot|screen\s+capture|screen\s+grab)\b|'
+      r'^screenshot$',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Screenshot → screenshot');
+      return IntentType.screenshot;
+    }
+
+    // ── 📱 3. READ MESSAGES/NOTIFICATIONS ───────────────────────────────
+    if (RegExp(
+      r'\b(read|check|show|display)\b.*\b(messages?|texts?|sms)\b|'
+      r'^(my\s+)?(messages?|texts?)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Read messages → readMessages');
+      return IntentType.readMessages;
+    }
+
+    if (RegExp(
+      r'\b(read|check|show|display|what\s+are|list)\b.*\b(notifications?|alerts?)\b|'
+      r'^notifications?$|^alerts?$',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Read notifications → readNotifications');
+      return IntentType.readNotifications;
+    }
+
+    // ── 📝 4. QUICK NOTES ───────────────────────────────────────────────
+    if (RegExp(
+      r'^(note|create\s+note|make\s+note|add\s+note|write\s+note|'
+      r'note\s+to\s+self|remember\s+this|jot\s+down|write\s+down)\s+',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Create note → createNote');
+      return IntentType.createNote;
+    }
+
+    // ── 🧮 5. CALCULATOR & CONVERTER ────────────────────────────────────
+    if (RegExp(
+      r"\b(calculate|compute|what('?s| is))\b.*\b(\d+|percent|plus|minus|times|divide)|"
+      r'^\d+\s*[+\-*/×÷]\s*\d+',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Calculation → calculate');
+      return IntentType.calculate;
+    }
+
+    if (RegExp(
+      r'\b(convert|change)\s+\d+(\.\d+)?\s+\w+\s+(to|into)\s+\w+\b|'
+      r'\bhow\s+many\s+\w+\s+in\s+\d+(\.\d+)?\s+\w+\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Unit conversion → convert');
+      return IntentType.convert;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SMART APP ACTIONS - Intent Detection
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // WhatsApp message: "send whatsapp to Mom saying hi" / "whatsapp Mom hello"
+    if (RegExp(
+      r'\b(whatsapp|whats\s*app)\b.*\b(to|send|message)\b|\b(send|message)\b.*\b(whatsapp|whats\s*app)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: WhatsApp message -> sendWhatsApp');
+      return IntentType.sendWhatsApp;
+    }
+
+    // Search on App: "search X on Amazon/Flipkart" / "find X on Swiggy"
+    if (RegExp(
+      r'\b(search|find|look\s+for|look\s+up|browse)\b.+\b(on|in)\s+(amazon|flipkart|myntra|swiggy|zomato|meesho|ajio)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Search on app -> searchOnApp');
+      return IntentType.searchOnApp;
+    }
+
+    // UPI Payment: "pay 500 to X" / "upi pay" / "send money" / "pay on gpay"
+    if (RegExp(
+      r'\b(pay|upi|gpay|phonpe|paytm|google\s+pay|phone\s*pe)\b.*\b(to|send|pay|money|₹|rs)\b|\b(send\s+money|make\s+payment)\b',
+      caseSensitive: false,
+    ).hasMatch(lo) &&
+        !lo.contains('attention') && !lo.contains('bill')) {
+      debugPrint('INTENT_DETECTION: UPI payment -> upiPayment');
+      return IntentType.upiPayment;
+    }
+
+    // Play on Spotify: "play X on spotify"
+    if (RegExp(
+      r'\b(play|listen\s+to)\b.+\b(on|in)\s+spotify\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Spotify play -> playOnSpotify');
+      return IntentType.playOnSpotify;
+    }
+
+    // Book Ride: "book uber/ola/ride/cab to X"
+    if (RegExp(
+      r'\b(book|get|call)\s+(a\s+)?(uber|ola|ride|cab|taxi)\b|\b(uber|ola)\s+(to|ride)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Book ride -> bookRide');
+      return IntentType.bookRide;
+    }
+
+    // Order Food: "order from swiggy/zomato" / "order food"
+    if (RegExp(
+      r'\b(order|get)\s+(food|something)?\s*(from|on|via)\s+(swiggy|zomato)\b|\border\s+food\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Order food -> orderFood');
+      return IntentType.orderFood;
+    }
+
+    // Share Content: "share X to whatsapp/instagram" / "share to X"
+    if (RegExp(
+      r'\bshare\b.+\b(to|on|via)\s+(whatsapp|instagram|telegram|twitter|facebook|x)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Share content -> shareContent');
+      return IntentType.shareContent;
+    }
+
+    // Open Profile: "open @username on instagram" / "check @X on twitter"
+    if (RegExp(
+      r'\b(open|check|visit|show|see|go\s+to)\s+@?\w+\s+(on|in)\s+(instagram|twitter|x|youtube|linkedin|facebook)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Open profile -> openProfile');
+      return IntentType.openProfile;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // ── Camera / OCR Scan ──────────────────────────────────────────────────
+    if (RegExp(
+      r'\b(scan|capture|ocr|extract\s+text|read\s+this|photograph|snap)\s+'
+      r'(this|my|the|a|an)?\s*'
+      r'(image|photo|picture|notes?|page|document|whiteboard|screenshot|screen|text|handwriting|book)\b',
+      caseSensitive: false,
+    ).hasMatch(lo) ||
+    RegExp(
+      r'\b(scan\s+(it|this|notes?|image|text)|open\s+scanner|camera\s+scan|'
+      r'scan\s+from\s+camera|take\s+a\s+scan|read\s+from\s+(image|photo|camera))\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Scan image → scanImage');
+      return IntentType.scanImage;
+    }
+
+    // ── Study Buddy ─────────────────────────────────────────────────────────
+    if (RegExp(
+      r'\b(create|make|generate|build)\s+(flashcards?|flash\s+cards?|study\s+cards?)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Create flashcards → studyCreateFlashcards');
+      return IntentType.studyCreateFlashcards;
+    }
+
+    if (RegExp(
+      r'\b(quiz\s+me|test\s+me|practice\s+quiz|start\s+quiz|begin\s+quiz|take\s+a\s+quiz)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Quiz → studyQuizMe');
+      return IntentType.studyQuizMe;
+    }
+
+    if (RegExp(
+      r'\b(review\s+(my\s+)?(flashcards?|cards?|flash\s+cards?)|study\s+review|spaced\s+repetition)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Review cards → studyReviewCards');
+      return IntentType.studyReviewCards;
+    }
+
+    if (RegExp(
+      r'\b(study\s+(stats?|statistics|progress|performance|analytics)|how\s+am\s+i\s+doing\s+in|my\s+study\s+progress)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Study stats → studyShowStats');
+      return IntentType.studyShowStats;
+    }
+
+    if (RegExp(
+      r'\b(i\s+have\s+(a|an)\s+exam|schedule\s+(an?\s+)?exam|exam\s+(on|in|at|is)|upcoming\s+exam|add\s+exam)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Exam schedule → studyScheduleExam');
+      return IntentType.studyScheduleExam;
+    }
+
+    if (RegExp(
+      r'\b(open\s+study\s*buddy|study\s+buddy|study\s+dashboard|my\s+decks?|show\s+(my\s+)?decks?)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Study dashboard → studyOpenDashboard');
+      return IntentType.studyOpenDashboard;
+    }
+
+    // ── 1️⃣3️⃣  LLM Fallback (for ambiguous natural language) ──────────────
+    // Before giving up, check if this looks like it might be an action request
+    // in natural language that the rule-based system missed
+    if (_llmClassifier != null && isAmbiguous(msg, lo)) {
+      debugPrint('INTENT_DETECTION: Ambiguous message, trying LLM classifier...');
+      try {
+        final classified = await _llmClassifier.classify(msg);
+        if (classified != null && classified.type != IntentType.normalChat) {
+          debugPrint('INTENT_DETECTION: LLM classified as ${classified.type}');
+          return classified.type;
+        }
+      } catch (e) {
+        debugPrint('INTENT_DETECTION: LLM classification failed: $e');
+        // Continue to default
+      }
+    }
+
+    // ── 1️⃣4️⃣  Default ───────────────────────────────────────────────────
     debugPrint('INTENT_DETECTION: No match → normalChat');
     return IntentType.normalChat;
+  }
+
+  /// Check if a message is ambiguous and might benefit from LLM classification
+  ///
+  /// Returns true if the message contains action keywords but doesn't match
+  /// clear rule-based patterns (e.g., "can you call John" vs "call John").
+  @visibleForTesting
+  bool isAmbiguous(String message, String lo) {
+    // If it starts with clear commands, it's NOT ambiguous
+    if (RegExp(
+      r'^(call|dial|text|sms|message|open|launch|start|search|find|'
+      r'remind|navigate|email|take|snap|turn|toggle|close|kill|stop)\s+',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      return false; // Clear pattern, rules handled it
+    }
+
+    // Check for action words anywhere in the message
+    final hasActionWords = RegExp(
+      r'\b(call|dial|phone|ring|text|sms|message|msg|open|launch|start|'
+      r'search|find|google|remind|set\s+alarm|navigate|directions|'
+      r'email|mail|photo|picture|camera|selfie|flashlight|torch|'
+      r'flash|settings|wifi|bluetooth)\b',
+      caseSensitive: false,
+    ).hasMatch(lo);
+
+    if (!hasActionWords) {
+      return false; // No action words, likely normal chat
+    }
+
+    // Contains conversational fluff + action words → ambiguous
+    final hasConversationalFluff = RegExp(
+      r'\b(can\s+you|could\s+you|would\s+you|will\s+you|please|pls|'
+      r'i\s+want|i\s+need|i\s+would\s+like|i\s+wanna|let\s+me|'
+      r'help\s+me|i\s+want\s+to|i\s+need\s+to|i\s+have\s+to|'
+      r'kindly|requesting|may\s+i)\b',
+      caseSensitive: false,
+    ).hasMatch(lo);
+
+    if (hasConversationalFluff && hasActionWords) {
+      return true; // Needs LLM to understand intent
+    }
+
+    // Action word in the middle/end but not at start → might be ambiguous
+    // Example: "John call kar" (Hinglish), "WhatsApp kholna hai" (Hindi + English)
+    final words = lo.split(RegExp(r'\s+'));
+    if (words.length >= 2 && hasActionWords) {
+      // Check if action word is NOT in first position
+      final firstWordIsAction = RegExp(
+        r'^(call|dial|text|sms|open|launch|search|find|remind|navigate|email)',
+        caseSensitive: false,
+      ).hasMatch(words[0]);
+
+      if (!firstWordIsAction) {
+        return true; // Action word not at start → ambiguous
+      }
+    }
+
+    return false; // Not ambiguous
   }
 
   // ──────────────────────────────────────────────────────────────────────────

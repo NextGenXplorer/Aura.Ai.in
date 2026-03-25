@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:aura_mobile/data/datasources/llm_service.dart';
 import 'package:aura_mobile/core/providers/ai_providers.dart';
 import 'package:aura_mobile/features/orchestrator/orchestrator_service.dart';
 

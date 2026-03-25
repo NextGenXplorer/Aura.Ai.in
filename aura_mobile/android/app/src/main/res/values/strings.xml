@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">AURA AI uses this accessibility service to read on-screen content so it can help you summarize, translate, explain, and extract information from whatever is currently displayed. No data is sent externally — all processing happens on your device.</string>
+</resources>

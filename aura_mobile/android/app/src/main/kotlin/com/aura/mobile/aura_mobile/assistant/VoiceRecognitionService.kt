@@ -46,22 +46,46 @@ class VoiceRecognitionService(
 
                 override fun onError(error: Int) {
                     isListening = false
-                    val errorMessage = when (error) {
-                        SpeechRecognizer.ERROR_AUDIO -> "Audio error"
-                        SpeechRecognizer.ERROR_CLIENT -> "Client error"
-                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Permission error"
-                        SpeechRecognizer.ERROR_NETWORK -> "Network error"
-                        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
-                        SpeechRecognizer.ERROR_NO_MATCH -> "No match"
-                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy"
-                        SpeechRecognizer.ERROR_SERVER -> "Server error"
-                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Speech timeout"
-                        else -> "Unknown error"
-                    }
-                    if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-                        onTimeout()
-                    } else {
-                        onError(errorMessage)
+                    android.util.Log.d("VoiceRecognition", "Error code: $error")
+
+                    // Handle specific errors differently for better UX
+                    when (error) {
+                        SpeechRecognizer.ERROR_NO_MATCH,
+                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
+                            // User didn't say anything or too quiet - just retry
+                            onTimeout()
+                        }
+
+                        SpeechRecognizer.ERROR_NETWORK,
+                        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> {
+                            // Network issue - inform user but still retry
+                            onError("network")
+                        }
+
+                        SpeechRecognizer.ERROR_AUDIO -> {
+                            // Microphone problem - serious issue
+                            onError("microphone")
+                        }
+
+                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
+                            // Permission denied - critical
+                            onError("permission")
+                        }
+
+                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> {
+                            // Service busy - retry should work
+                            onTimeout()
+                        }
+
+                        SpeechRecognizer.ERROR_SERVER -> {
+                            // Google's server issue - retry
+                            onError("server")
+                        }
+
+                        else -> {
+                            // Unknown error - retry anyway
+                            onTimeout()
+                        }
                     }
                 }
 
@@ -92,22 +116,40 @@ class VoiceRecognitionService(
         if (!isListening) {
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3) // Get top 3 results for better accuracy
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                // Increase silence timeout so users can pause while thinking (measured in milliseconds)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 5000L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 5000L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 15000L)
+
+                // ═══ IMPROVED TIMEOUTS FOR BETTER USER EXPERIENCE ═══
+
+                // Complete silence: 10 seconds (was 5s - TOO SHORT!)
+                // User can pause to think without being cut off
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 10000L)
+
+                // Possibly complete silence: 8 seconds (was 5s)
+                // More patient with natural pauses
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 8000L)
+
+                // Minimum listening duration: 30 seconds (was 15s)
+                // Allow longer, more complex requests
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 30000L)
+
+                // Prefer on-device recognition when available (faster, more private)
+                putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+
+                // Get confidence scores to filter out uncertain results
+                putExtra(RecognizerIntent.EXTRA_CONFIDENCE_SCORES, true)
             }
             try {
                 speechRecognizer?.startListening(intent)
                 isListening = true
-                
-                // Auto stop after 8 seconds if absolutely no speech is detected (onBeginningOfSpeech is never called)
+
+                // Auto stop after 20 seconds if absolutely no speech detected
+                // (was 8s - TOO IMPATIENT!)
+                // This only triggers if user says NOTHING at all
                 handler.removeCallbacks(stopListeningRunnable)
-                handler.postDelayed(stopListeningRunnable, 8000)
+                handler.postDelayed(stopListeningRunnable, 20000)
             } catch (e: Exception) {
-                onError("Failed to start listening")
+                onError("Failed to start listening: ${e.message}")
             }
         }
     }

@@ -4,6 +4,8 @@ import 'package:aura_mobile/domain/entities/model_info.dart';
 import 'package:aura_mobile/data/datasources/model_manager.dart';
 import 'package:aura_mobile/core/providers/ai_providers.dart';
 import 'package:aura_mobile/ai/run_anywhere_service.dart';
+import 'package:aura_mobile/core/errors/app_exceptions.dart';
+import 'package:aura_mobile/core/services/error_handler_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // Model Manager Provider
@@ -55,9 +57,11 @@ class ModelSelectorState {
 // Model Selector Notifier
 class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
   final Ref _ref;
+  final ErrorHandlerService _errorHandler = ErrorHandlerService();
 
   StreamSubscription? _downloadSubscription;
   final Map<String, String> _taskIdToModelId = {};
+  final Map<String, int> _downloadRetryCount = {};
 
   ModelSelectorNotifier(this._ref)
       : super(ModelSelectorState(availableModels: modelCatalog)) {
@@ -112,17 +116,38 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
         }
         _taskIdToModelId.remove(update.id);
       } else if (update.status == DownloadTaskStatus.failed) {
-        final newProgress = Map<String, double>.from(state.downloadProgress);
-        newProgress.remove(modelId);
-
-        final newErrors = Map<String, String?>.from(state.downloadErrors);
-        newErrors[modelId] = "Download failed";
-
-        state = state.copyWith(
-          downloadProgress: newProgress,
-          downloadErrors: newErrors,
-        );
         _taskIdToModelId.remove(update.id);
+
+        final retryCount = _downloadRetryCount[modelId] ?? 0;
+
+        // Automatically retry up to 3 times
+        if (retryCount < 3) {
+          _errorHandler.logWarning(
+            'Download failed for $modelId. Retrying (${retryCount + 1}/3)...',
+          );
+
+          final newErrors = Map<String, String?>.from(state.downloadErrors);
+          newErrors[modelId] = 'Download failed. Retrying (${retryCount + 1}/3)...';
+          state = state.copyWith(downloadErrors: newErrors);
+
+          // Retry after delay (don't await to avoid blocking the stream)
+          retryDownload(modelId);
+        } else {
+          // Max retries exceeded
+          final newProgress = Map<String, double>.from(state.downloadProgress);
+          newProgress.remove(modelId);
+
+          final newErrors = Map<String, String?>.from(state.downloadErrors);
+          newErrors[modelId] =
+              "Download failed after 3 attempts. Please check your connection.";
+
+          state = state.copyWith(
+            downloadProgress: newProgress,
+            downloadErrors: newErrors,
+          );
+
+          _downloadRetryCount.remove(modelId);
+        }
       }
     });
   }
@@ -170,7 +195,7 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
             activeModelIdCandidate = model.id;
           }
         } catch (e) {
-          print("Error mapping path to ID: $e");
+          _errorHandler.logWarning("Error mapping path to ID: $e");
         }
       }
     }
@@ -196,10 +221,15 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
         final llmService = _ref.read(llmServiceProvider);
         await llmService.loadModel(modelPath);
         state = state.copyWith(activeModelId: activeModelIdCandidate);
-      } catch (e) {
-        print('Initialization Error: Failed to load active model: $e');
+      } on ModelException catch (e) {
+        _errorHandler.handleError(e);
         final newErrors = Map<String, String?>.from(state.downloadErrors);
-        newErrors[activeModelIdCandidate] = "Failed to load: $e";
+        newErrors[activeModelIdCandidate] = e.userMessage;
+        state = state.copyWith(downloadErrors: newErrors);
+      } catch (e) {
+        _errorHandler.logWarning('Failed to load active model: $e');
+        final newErrors = Map<String, String?>.from(state.downloadErrors);
+        newErrors[activeModelIdCandidate] = "Failed to load model";
         state = state.copyWith(downloadErrors: newErrors);
       }
     }
@@ -210,26 +240,72 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
     final modelManager = _ref.read(modelManagerProvider);
     final runAnywhere = _ref.read(runAnywhereProvider);
 
+    // Clear previous errors
     final newErrors = Map<String, String?>.from(state.downloadErrors);
     newErrors.remove(modelId);
     state = state.copyWith(downloadErrors: newErrors);
 
     try {
+      // 1. Validate disk space before starting download
+      await modelManager.validateDiskSpace(modelId);
+
+      // 2. Start download
       final modelPath = await modelManager.getModelPath(modelId);
       final taskId = await runAnywhere.downloadModel(model.url, modelPath);
+
       if (taskId != null) {
         _taskIdToModelId[taskId] = modelId;
+        _downloadRetryCount[modelId] = 0; // Reset retry count
+
         final newProgress = Map<String, double>.from(state.downloadProgress);
         newProgress[modelId] = 0.0;
         state = state.copyWith(downloadProgress: newProgress);
+
+        _errorHandler.logInfo('Started download for ${model.name}');
       }
+    } on ModelException catch (e) {
+      // Handle specific model exceptions with user-friendly messages
+      _handleDownloadError(modelId, e.userMessage);
+      _errorHandler.handleError(e);
     } catch (e) {
-      final newProgress = Map<String, double>.from(state.downloadProgress);
-      newProgress.remove(modelId);
-      final newErrors = Map<String, String?>.from(state.downloadErrors);
-      newErrors[modelId] = e.toString();
-      state = state.copyWith(downloadProgress: newProgress, downloadErrors: newErrors);
+      // Handle generic errors
+      _handleDownloadError(modelId, 'Download failed: ${e.toString()}');
+      _errorHandler.logWarning('Download error for $modelId: $e');
     }
+  }
+
+  void _handleDownloadError(String modelId, String errorMessage) {
+    final newProgress = Map<String, double>.from(state.downloadProgress);
+    newProgress.remove(modelId);
+
+    final newErrors = Map<String, String?>.from(state.downloadErrors);
+    newErrors[modelId] = errorMessage;
+
+    state = state.copyWith(
+      downloadProgress: newProgress,
+      downloadErrors: newErrors,
+    );
+  }
+
+  /// Retry a failed download
+  Future<void> retryDownload(String modelId) async {
+    final retryCount = _downloadRetryCount[modelId] ?? 0;
+
+    if (retryCount >= 3) {
+      _handleDownloadError(
+        modelId,
+        'Download failed after 3 attempts. Please check your connection and try again later.',
+      );
+      return;
+    }
+
+    _downloadRetryCount[modelId] = retryCount + 1;
+    _errorHandler.logInfo('Retrying download for $modelId (attempt ${retryCount + 1}/3)');
+
+    // Wait before retrying (exponential backoff)
+    await Future.delayed(_errorHandler.getRetryDelay(retryCount));
+
+    await downloadModel(modelId);
   }
 
   Future<void> deleteModel(String modelId) async {
@@ -245,9 +321,15 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
         final prefs = await SharedPreferences.getInstance();
         await prefs.remove('active_model_id');
       }
-      state = state.copyWith(downloadedModelIds: newDownloaded, activeModelId: newActiveModelId, totalStorageUsed: totalStorage);
+      state = state.copyWith(
+        downloadedModelIds: newDownloaded,
+        activeModelId: newActiveModelId,
+        totalStorageUsed: totalStorage,
+      );
+    } on ModelException catch (e) {
+      _errorHandler.handleError(e);
     } catch (e) {
-      print('Error deleting model: $e');
+      _errorHandler.logWarning('Error deleting model: $e');
     }
   }
 
@@ -266,8 +348,19 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
       await prefs.setString('active_model_id', modelId);
       await prefs.setString('selected_model_path', modelPath);
       state = state.copyWith(activeModelId: modelId);
+
+      _errorHandler.logInfo('Successfully loaded model: ${modelManager.getModelById(modelId)?.name}');
+    } on ModelException catch (e) {
+      _errorHandler.handleError(e);
+      // Show error in UI
+      final newErrors = Map<String, String?>.from(state.downloadErrors);
+      newErrors[modelId] = e.userMessage;
+      state = state.copyWith(downloadErrors: newErrors);
     } catch (e) {
-      print('Error selecting model: $e');
+      _errorHandler.logWarning('Error selecting model: $e');
+      final newErrors = Map<String, String?>.from(state.downloadErrors);
+      newErrors[modelId] = 'Failed to load model';
+      state = state.copyWith(downloadErrors: newErrors);
     }
   }
 

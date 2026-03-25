@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:flutter/foundation.dart';
+import 'dart:typed_data';
 import 'package:fllama/fllama.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:aura_mobile/core/services/foreground_service_handler.dart';
+import 'package:aura_mobile/core/errors/app_exceptions.dart';
+import 'package:aura_mobile/core/services/error_handler_service.dart';
+import 'package:disk_space_2/disk_space_2.dart';
 
 /// Status of a download task
 enum DownloadTaskStatus {
@@ -41,6 +44,12 @@ class RunAnywhere {
   Completer<void>? _initCompleter;
   double? _contextId;
   String? _currentModelPath;
+  final ErrorHandlerService _errorHandler = ErrorHandlerService();
+
+  // Configuration
+  static const Duration _modelLoadTimeout = Duration(seconds: 120);
+  static const Duration _inferenceTimeout = Duration(seconds: 90);
+  static const int _minFreeDiskSpaceMB = 100;
 
   /// Whether a model is currently loaded and ready for inference.
   bool get isModelLoaded => _contextId != null;
@@ -57,74 +66,74 @@ class RunAnywhere {
 
     _initCompleter = Completer<void>();
     try {
-      if (kDebugMode) print('RunAnywhere: Initializing...');
+      _errorHandler.logInfo('RunAnywhere: Initializing...');
 
-    // FIX #1: Initialize FlutterForegroundTask BEFORE any service calls.
-    // Without this, startService() silently fails on Android.
-    FlutterForegroundTask.init(
-      androidNotificationOptions: AndroidNotificationOptions(
-        channelId: 'download_channel',
-        channelName: 'Model Downloads',
-        channelDescription: 'AI model download progress',
-        channelImportance: NotificationChannelImportance.LOW,
-        priority: NotificationPriority.LOW,
-        onlyAlertOnce: true,
-      ),
-      iosNotificationOptions: const IOSNotificationOptions(
-        showNotification: true,
-        playSound: false,
-      ),
-      foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.nothing(),
-        autoRunOnBoot: false,
-        allowWakeLock: true,
-        allowWifiLock: true,
-      ),
-    );
+      // Initialize FlutterForegroundTask BEFORE any service calls.
+      FlutterForegroundTask.init(
+        androidNotificationOptions: AndroidNotificationOptions(
+          channelId: 'download_channel',
+          channelName: 'Model Downloads',
+          channelDescription: 'AI model download progress',
+          channelImportance: NotificationChannelImportance.LOW,
+          priority: NotificationPriority.LOW,
+          onlyAlertOnce: true,
+        ),
+        iosNotificationOptions: const IOSNotificationOptions(
+          showNotification: true,
+          playSound: false,
+        ),
+        foregroundTaskOptions: ForegroundTaskOptions(
+          eventAction: ForegroundTaskEventAction.nothing(),
+          autoRunOnBoot: false,
+          allowWakeLock: true,
+          allowWifiLock: true,
+        ),
+      );
 
-    // FIX #4: Safe type casting when receiving data from the foreground task.
-    // The platform channel may deliver values as dynamic types.
-    FlutterForegroundTask.addTaskDataCallback((data) {
-      if (data is List && data.length >= 3) {
-        try {
-          final String id = data[0].toString();
-          final int status = data[1] is int
-              ? data[1] as int
-              : int.tryParse(data[1].toString()) ?? 0;
-          final int progress = data[2] is int
-              ? data[2] as int
-              : int.tryParse(data[2].toString()) ?? 0;
-          _downloadStreamController.add(
-            DownloadUpdate(id, DownloadTaskStatus.fromInt(status), progress),
-          );
-        } catch (e) {
-          if (kDebugMode) print('RunAnywhere: Failed to parse task data: $e');
-        }
-      }
-    });
-
-    // Initialize Token Listener Globally
-    Fllama.instance()?.onTokenStream?.listen((data) {
-      if (kDebugMode) print('RunAnywhere: Stream Data: $data');
-
-      if (data['function'] == 'completion') {
-        final result = data['result'];
-        if (result is Map && result.containsKey('token')) {
-          final token = result['token']?.toString();
-          if (_activeChatController != null &&
-              !_activeChatController!.isClosed &&
-              token != null) {
-            _activeChatController!.add(token);
+      // Safe type casting when receiving data from the foreground task
+      FlutterForegroundTask.addTaskDataCallback((data) {
+        if (data is List && data.length >= 3) {
+          try {
+            final String id = data[0].toString();
+            final int status = data[1] is int
+                ? data[1] as int
+                : int.tryParse(data[1].toString()) ?? 0;
+            final int progress = data[2] is int
+                ? data[2] as int
+                : int.tryParse(data[2].toString()) ?? 0;
+            _downloadStreamController.add(
+              DownloadUpdate(id, DownloadTaskStatus.fromInt(status), progress),
+            );
+          } catch (e) {
+            _errorHandler.logDebug('Failed to parse task data: $e');
           }
         }
-      } else if (data['function'] == 'loadProgress') {
-        if (kDebugMode) print('RunAnywhere: Load Progress: ${data['result']}');
-      }
-    });
+      });
 
-    _isInitialized = true;
-    _initCompleter?.complete();
+      // Initialize Token Listener Globally
+      Fllama.instance()?.onTokenStream?.listen((data) {
+        _errorHandler.logDebug('Stream Data: $data');
+
+        if (data['function'] == 'completion') {
+          final result = data['result'];
+          if (result is Map && result.containsKey('token')) {
+            final token = result['token']?.toString();
+            if (_activeChatController != null &&
+                !_activeChatController!.isClosed &&
+                token != null) {
+              _activeChatController!.add(token);
+            }
+          }
+        } else if (data['function'] == 'loadProgress') {
+          _errorHandler.logDebug('Load Progress: ${data['result']}');
+        }
+      });
+
+      _isInitialized = true;
+      _initCompleter?.complete();
+      _errorHandler.logInfo('RunAnywhere: Initialization complete');
     } catch (e) {
+      _errorHandler.logWarning('RunAnywhere initialization failed: $e');
       _initCompleter?.completeError(e);
       _initCompleter = null;
       rethrow;
@@ -132,30 +141,32 @@ class RunAnywhere {
   }
 
   StreamController<String>? _activeChatController;
+  Timer? _inferenceTimeoutTimer;
 
-  /// Download model from URL to local path using a Foreground Service.
-  /// Returns the taskId (URL) on success, null on failure.
+  /// Download model from URL to local path using a Foreground Service
   Future<String?> downloadModel(String url, String destinationPath) async {
     if (!_isInitialized) await initialize();
 
-    // Ensure directory exists
-    final file = File(destinationPath);
-    if (!await file.parent.exists()) {
-      await file.parent.create(recursive: true);
-    }
-
     try {
-      if (kDebugMode) {
-        print('RunAnywhere: Starting Foreground Download: $url');
+      // Validation
+      if (url.trim().isEmpty) {
+        throw ValidationException.emptyInput('Download URL');
       }
+
+      // Check available disk space
+      await _checkDiskSpace(destinationPath);
+
+      // Ensure directory exists
+      final file = File(destinationPath);
+      if (!await file.parent.exists()) {
+        await file.parent.create(recursive: true);
+      }
+
+      _errorHandler.logInfo('Starting model download: $url');
 
       final String fileName = file.uri.pathSegments.last;
 
-      // FIX #3: Removed canDrawOverlays check — it opens a system settings
-      // screen and blocks the download. SYSTEM_ALERT_WINDOW is NOT needed
-      // for a foreground download service.
-
-      // Request battery optimization exemption so Android doesn't kill us
+      // Request battery optimization exemption
       if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
         await FlutterForegroundTask.requestIgnoreBatteryOptimization();
       }
@@ -167,7 +178,7 @@ class RunAnywhere {
       }
 
       await FlutterForegroundTask.startService(
-        serviceTypes: [ForegroundServiceTypes.dataSync], // Android 14 fix
+        serviceTypes: [ForegroundServiceTypes.dataSync],
         notificationTitle: 'Preparing Download',
         notificationText: fileName,
         callback: startCallback,
@@ -180,136 +191,268 @@ class RunAnywhere {
         'fileName': fileName,
       });
 
+      _errorHandler.logInfo('Download dispatched successfully');
       return url;
     } catch (e) {
-      print('RunAnywhere: Download Dispatch Failed: $e');
-      return null;
+      if (e is AuraException) {
+        _errorHandler.handleError(e);
+        rethrow;
+      }
+
+      _errorHandler.logWarning('Download dispatch failed: $e');
+      throw StorageException.databaseError('downloadModel', e);
+    }
+  }
+
+  /// Check if there's enough disk space for download/model loading
+  Future<void> _checkDiskSpace(String path) async {
+    try {
+      final freeSpace = await DiskSpace.getFreeDiskSpace;
+      if (freeSpace != null && freeSpace < _minFreeDiskSpaceMB) {
+        throw StorageException.insufficientSpace(_minFreeDiskSpaceMB);
+      }
+    } catch (e) {
+      if (e is StorageException) {
+        rethrow;
+      }
+      _errorHandler.logWarning('Disk space check failed: $e');
+      // Continue anyway - check might fail but space might be available
     }
   }
 
   /// Cancel a specific download task
   Future<void> cancelDownload(String taskId) async {
-    await FlutterForegroundTask.stopService();
+    try {
+      await FlutterForegroundTask.stopService();
+      _errorHandler.logInfo('Download cancelled: $taskId');
+    } catch (e) {
+      _errorHandler.logWarning('Failed to cancel download: $e');
+    }
   }
 
   /// Get existing task ID for a URL
   Future<String?> getTaskIdForUrl(String url) async {
-    // Return null by default. The background service will announce itself
-    // to the UI via the stream when it starts sending progress.
+    // The background service announces itself via the stream
     return null;
   }
 
-  /// Load a model from the given path
+  /// Load a model from the given path with comprehensive validation
   Future<void> loadModel(String modelPath) async {
     if (!_isInitialized) await initialize();
 
+    // Check if model is already loaded
     if (_currentModelPath == modelPath && _contextId != null) {
-      if (kDebugMode) print('RunAnywhere: Model already loaded: $modelPath');
+      _errorHandler.logDebug('Model already loaded: $modelPath');
       return;
     }
 
-    if (_contextId != null) {
-      if (kDebugMode) print('RunAnywhere: Unloading previous model');
-      Fllama.instance()?.releaseContext(_contextId!);
-      _contextId = null;
-    }
-
-    if (kDebugMode) print('RunAnywhere: Loading model from $modelPath');
-
     try {
+      // 1. Validate file exists
       final file = File(modelPath);
       if (!await file.exists()) {
-        throw Exception('Model file not found at $modelPath');
+        final modelName = modelPath.split(Platform.pathSeparator).last;
+        throw ModelException.notFound(modelName);
       }
 
-      final result = await Fllama.instance()?.initContext(
-        modelPath,
-        emitLoadProgress: true,
+      // 2. Check file size and validate format
+      final fileSizeBytes = await file.length();
+      final fileSizeMB = fileSizeBytes / (1024 * 1024);
+
+      if (fileSizeMB < 1) {
+        final modelName = modelPath.split(Platform.pathSeparator).last;
+        throw ModelException.corrupted(modelName, 'File too small (${fileSizeMB.toStringAsFixed(2)} MB)');
+      }
+
+      // 3. Validate GGUF format
+      if (!await _validateGGUFFormat(file)) {
+        final modelName = modelPath.split(Platform.pathSeparator).last;
+        throw ModelException.invalidFormat(modelName);
+      }
+
+      _errorHandler.logInfo(
+        'Loading model: ${fileSizeMB.toStringAsFixed(2)} MB from $modelPath',
       );
 
-      if (result != null && result.containsKey('contextId')) {
-        final id = result['contextId'];
-        if (id is double) {
-          _contextId = id;
-        } else if (id is int) {
-          _contextId = id.toDouble();
-        } else {
-          _contextId = double.tryParse(id.toString());
+      // 3. Unload previous model if exists
+      if (_contextId != null) {
+        _errorHandler.logDebug('Unloading previous model');
+        try {
+          Fllama.instance()?.releaseContext(_contextId!);
+        } catch (e) {
+          _errorHandler.logWarning('Failed to release previous context: $e');
         }
+        _contextId = null;
+        _currentModelPath = null;
+      }
 
-        if (_contextId != null) {
-          _currentModelPath = modelPath;
-          if (kDebugMode) {
-            print('RunAnywhere: Model loaded. ID: $_contextId');
-          }
-        } else {
-          throw Exception('Failed to parse contextId from $id');
-        }
-      } else {
-        throw Exception(
-          'Failed to load model context: Result was null or missing contextId',
+      // 4. Load model with timeout
+      final initFuture = Fllama.instance()?.initContext(
+        modelPath,
+        emitLoadProgress: true,
+      ) ?? Future.value(null);
+
+      final result = await initFuture.timeout(
+        _modelLoadTimeout,
+        onTimeout: () {
+          throw AIServiceException(
+            message: 'Model loading timed out',
+            technicalDetails: 'Loading exceeded ${_modelLoadTimeout.inSeconds} seconds',
+            recoverySuggestion: 'Try using a smaller model or restart the app',
+            errorCode: 'AI_MODEL_LOAD_TIMEOUT',
+          );
+        },
+      );
+
+      // 5. Validate result
+      if (result == null || !result.containsKey('contextId')) {
+        throw AIServiceException.modelLoadFailed(
+          modelPath,
+          'Result was null or missing contextId',
         );
       }
+
+      // 6. Parse context ID
+      final id = result['contextId'];
+      if (id is double) {
+        _contextId = id;
+      } else if (id is int) {
+        _contextId = id.toDouble();
+      } else {
+        _contextId = double.tryParse(id.toString());
+      }
+
+      if (_contextId == null) {
+        throw AIServiceException.modelLoadFailed(
+          modelPath,
+          'Failed to parse contextId from $id',
+        );
+      }
+
+      // 7. Success
+      _currentModelPath = modelPath;
+      _errorHandler.logInfo('Model loaded successfully. Context ID: $_contextId');
     } catch (e) {
-      print('RunAnywhere: Load Model Failed: $e');
-      rethrow;
+      _contextId = null;
+      _currentModelPath = null;
+
+      if (e is AuraException) {
+        _errorHandler.handleError(e);
+        rethrow;
+      }
+
+      _errorHandler.logWarning('Model loading failed: $e');
+      throw AIServiceException.modelLoadFailed(modelPath, e);
     }
   }
 
-  /// Chat with the model (streaming)
+  /// Chat with the model (streaming) with timeout handling.
+  /// [temperature] controls randomness: lower = more factual (0.3), higher = more creative (0.7).
   Stream<String> chat({
     required String prompt,
     String? systemPrompt,
     int maxTokens = 512,
-  }) {
-    if (!_isInitialized) throw Exception('RunAnywhere not initialized');
-    if (_contextId == null) throw Exception('No model loaded');
-
-    if (_activeChatController != null && !_activeChatController!.isClosed) {
-      _activeChatController!.close();
+    Duration? timeout,
+    double temperature = 0.7,
+  }) async* {
+    // Validation
+    if (!_isInitialized) {
+      throw AIServiceException(
+        message: 'AI service not initialized',
+        technicalDetails: 'RunAnywhere.initialize() was not called',
+        recoverySuggestion: 'Please restart the app',
+        errorCode: 'AI_NOT_INITIALIZED',
+      );
     }
 
-    // ChatML format
-    final StringBuffer promptBuffer = StringBuffer();
-    if (systemPrompt != null && systemPrompt.isNotEmpty) {
-      promptBuffer.write('<|im_start|>system\n$systemPrompt\n<|im_end|>\n');
+    if (_contextId == null) {
+      throw AIServiceException.modelNotLoaded();
     }
-    promptBuffer.write('<|im_start|>user\n$prompt\n<|im_end|>\n');
-    promptBuffer.write('<|im_start|>assistant\n');
-    final fullPrompt = promptBuffer.toString();
 
-    if (kDebugMode) print('RunAnywhere: Sending Prompt: $fullPrompt');
+    if (prompt.trim().isEmpty) {
+      throw ValidationException.emptyInput('Prompt');
+    }
 
-    _activeChatController = StreamController<String>();
-    final controller = _activeChatController!;
+    try {
+      // Close any active chat
+      if (_activeChatController != null && !_activeChatController!.isClosed) {
+        await _activeChatController!.close();
+      }
 
-    _runInference(controller, fullPrompt, maxTokens);
+      // Build prompt in ChatML format
+      final StringBuffer promptBuffer = StringBuffer();
+      if (systemPrompt != null && systemPrompt.isNotEmpty) {
+        promptBuffer.write('<|im_start|>system\n$systemPrompt\n<|im_end|>\n');
+      }
+      promptBuffer.write('<|im_start|>user\n$prompt\n<|im_end|>\n');
+      promptBuffer.write('<|im_start|>assistant\n');
+      final fullPrompt = promptBuffer.toString();
 
-    return controller.stream;
+      _errorHandler.logDebug('Starting inference (${maxTokens} tokens max)');
+
+      _activeChatController = StreamController<String>();
+      final controller = _activeChatController!;
+
+      // Set up timeout timer
+      final timeoutDuration = timeout ?? _inferenceTimeout;
+      _inferenceTimeoutTimer = Timer(timeoutDuration, () {
+        if (!controller.isClosed) {
+          _errorHandler.logWarning(
+            'Inference timeout after ${timeoutDuration.inSeconds}s',
+          );
+          controller.addError(AIServiceException.inferenceTimeout());
+          controller.close();
+        }
+      });
+
+      // Start inference in background
+      _runInference(controller, fullPrompt, maxTokens, temperature);
+
+      // Stream tokens
+      await for (final token in controller.stream) {
+        yield token;
+      }
+    } catch (e) {
+      if (e is AuraException) {
+        _errorHandler.handleError(e);
+        rethrow;
+      }
+
+      _errorHandler.logWarning('Chat inference failed: $e');
+      throw AIServiceException(
+        message: 'AI inference failed',
+        technicalDetails: e.toString(),
+        recoverySuggestion: 'Try reloading the model or using a shorter prompt',
+        errorCode: 'AI_INFERENCE_FAILED',
+      );
+    } finally {
+      _inferenceTimeoutTimer?.cancel();
+      _inferenceTimeoutTimer = null;
+    }
   }
 
   Future<void> _runInference(
     StreamController<String> controller,
     String fullPrompt,
     int maxTokens,
+    double temperature,
   ) async {
     try {
       await Fllama.instance()?.completion(
         _contextId!,
         prompt: fullPrompt,
         stop: ['<|im_end|>', '<|im_start|>', 'User:', 'System:'],
-        temperature: 0.7,
-        topP: 0.9,
+        temperature: temperature,
+        topP: temperature < 0.5 ? 0.8 : 0.9, // Tighter sampling for factual tasks
         nPredict: maxTokens,
         emitRealtimeCompletion: true,
       );
     } catch (e) {
-      print('Error during inference: $e');
+      _errorHandler.logWarning('Inference error: $e');
       if (!controller.isClosed) {
-        controller.add(' [Error: $e]');
+        controller.addError(e);
       }
     } finally {
-      if (kDebugMode) print('\nRunAnywhere: Generation Complete');
+      _errorHandler.logDebug('Inference complete');
       if (!controller.isClosed) {
         await controller.close();
       }
@@ -321,15 +464,82 @@ class RunAnywhere {
 
   /// Generate embeddings for a given text
   Future<List<double>> getEmbeddings(String text) async {
-    if (!_isInitialized) throw Exception('RunAnywhere not initialized');
-    return [];
+    // Validation
+    if (!_isInitialized) {
+      throw AIServiceException(
+        message: 'AI service not initialized',
+        technicalDetails: 'RunAnywhere.initialize() was not called',
+        recoverySuggestion: 'Please restart the app',
+        errorCode: 'AI_NOT_INITIALIZED',
+      );
+    }
+
+    if (!isModelLoaded) {
+      throw AIServiceException.modelNotLoaded();
+    }
+
+    if (text.trim().isEmpty) {
+      throw ValidationException.emptyInput('Text for embedding');
+    }
+
+    try {
+      // TODO: Implement actual embedding generation with fllama
+      // For now, return empty to maintain compatibility
+      _errorHandler.logDebug('Embedding generation requested (not yet implemented)');
+      return [];
+    } catch (e) {
+      _errorHandler.logWarning('Embedding generation failed: $e');
+      throw AIServiceException.embeddingFailed(text, e);
+    }
   }
 
-  void dispose() {
+  /// Unload the current model and free resources
+  void unloadModel() {
     if (_contextId != null) {
-      Fllama.instance()?.releaseContext(_contextId!);
+      try {
+        Fllama.instance()?.releaseContext(_contextId!);
+        _errorHandler.logInfo('Model unloaded successfully');
+      } catch (e) {
+        _errorHandler.logWarning('Failed to unload model: $e');
+      }
       _contextId = null;
+      _currentModelPath = null;
     }
+  }
+
+  /// Get the current model path
+  String? get currentModelPath => _currentModelPath;
+
+  /// Validate GGUF file format by checking magic bytes
+  Future<bool> _validateGGUFFormat(File file) async {
+    try {
+      // GGUF magic bytes: 'GGUF' (0x47475546 in big-endian, 0x46554747 in little-endian)
+      const int ggufMagic = 0x46554747;
+
+      final bytes = await file.openRead(0, 4).first;
+      if (bytes.length < 4) {
+        _errorHandler.logWarning('File too small to validate GGUF format');
+        return false;
+      }
+
+      final magic = ByteData.sublistView(Uint8List.fromList(bytes)).getUint32(0, Endian.little);
+      final isValid = magic == ggufMagic;
+
+      if (!isValid) {
+        _errorHandler.logWarning('Invalid GGUF magic bytes: 0x${magic.toRadixString(16)}');
+      }
+
+      return isValid;
+    } catch (e) {
+      _errorHandler.logWarning('Error validating GGUF format: $e');
+      return false;
+    }
+  }
+
+  /// Dispose resources
+  void dispose() {
+    _inferenceTimeoutTimer?.cancel();
+    unloadModel();
     _downloadStreamController.close();
   }
 }

@@ -116,7 +116,7 @@ class AssistantForegroundService : Service() {
             },
             onError = { error ->
                 Log.e("AuraAssistant", "Voice Error: $error")
-                if (retryCount < 1) {
+                if (retryCount < 3) {
                     retryCount++
                     val phrases = listOf("Can you please repeat?", "Could you come again?", "I didn't quite catch that, can you repeat?")
                     ttsManager.speak(phrases.random())
@@ -133,7 +133,7 @@ class AssistantForegroundService : Service() {
             },
             onTimeout = {
                 Log.d("AuraAssistant", "Speech timeout/No Match detected.")
-                if (retryCount < 1) {
+                if (retryCount < 3) {
                     retryCount++
                     val phrases = listOf("Can you please repeat?", "Could you come again?", "I didn't hear anything, please repeat.")
                     ttsManager.speak(phrases.random())
