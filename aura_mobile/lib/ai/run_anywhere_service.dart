@@ -48,7 +48,7 @@ class RunAnywhere {
 
   // Configuration
   static const Duration _modelLoadTimeout = Duration(seconds: 120);
-  static const Duration _inferenceTimeout = Duration(seconds: 90);
+  static const Duration _inferenceTimeout = Duration(seconds: 180); // 3 min for long code generation
   static const int _minFreeDiskSpaceMB = 100;
 
   /// Whether a model is currently loaded and ready for inference.
@@ -373,9 +373,12 @@ class RunAnywhere {
     }
 
     try {
-      // Close any active chat
+      // Close any active chat and wait for the previous inference to settle.
+      // fllama only supports one inference at a time per context.
       if (_activeChatController != null && !_activeChatController!.isClosed) {
         await _activeChatController!.close();
+        // Give the native side a brief moment to release resources
+        await Future.delayed(const Duration(milliseconds: 100));
       }
 
       // Build prompt in ChatML format
@@ -392,14 +395,15 @@ class RunAnywhere {
       _activeChatController = StreamController<String>();
       final controller = _activeChatController!;
 
-      // Set up timeout timer
+      // Set up timeout timer — on timeout, gracefully close the stream
+      // so whatever tokens were already generated still show up.
       final timeoutDuration = timeout ?? _inferenceTimeout;
       _inferenceTimeoutTimer = Timer(timeoutDuration, () {
         if (!controller.isClosed) {
           _errorHandler.logWarning(
-            'Inference timeout after ${timeoutDuration.inSeconds}s',
+            'Inference timeout after ${timeoutDuration.inSeconds}s — closing stream with partial output',
           );
-          controller.addError(AIServiceException.inferenceTimeout());
+          // Don't add error — just close the stream so partial response shows
           controller.close();
         }
       });
@@ -421,7 +425,7 @@ class RunAnywhere {
       throw AIServiceException(
         message: 'AI inference failed',
         technicalDetails: e.toString(),
-        recoverySuggestion: 'Try reloading the model or using a shorter prompt',
+        recoverySuggestion: 'Try starting a new chat or restarting the app',
         errorCode: 'AI_INFERENCE_FAILED',
       );
     } finally {
@@ -437,12 +441,31 @@ class RunAnywhere {
     double temperature,
   ) async {
     try {
-      await Fllama.instance()?.completion(
+      final instance = Fllama.instance();
+      if (instance == null) {
+        if (!controller.isClosed) {
+          controller.addError(AIServiceException(
+            message: 'AI engine not available',
+            technicalDetails: 'Fllama instance is null',
+            recoverySuggestion: 'Please restart the app',
+            errorCode: 'AI_ENGINE_NULL',
+          ));
+        }
+        return;
+      }
+
+      await instance.completion(
         _contextId!,
         prompt: fullPrompt,
-        stop: ['<|im_end|>', '<|im_start|>', 'User:', 'System:'],
+        stop: [
+          '<|im_end|>',
+          '<|im_start|>',
+          '<|endoftext|>',
+          '\nHuman:',
+          '\nUser:',
+        ],
         temperature: temperature,
-        topP: temperature < 0.5 ? 0.8 : 0.9, // Tighter sampling for factual tasks
+        topP: temperature < 0.5 ? 0.8 : 0.9,
         nPredict: maxTokens,
         emitRealtimeCompletion: true,
       );

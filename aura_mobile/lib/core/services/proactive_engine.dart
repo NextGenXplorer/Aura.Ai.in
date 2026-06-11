@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:aura_mobile/core/services/notification_service.dart';
 
@@ -65,7 +66,7 @@ class ProactiveEngine {
         message: 'Time for an intensive review. You have $dueCards cards waiting.',
         type: NudgeType.urgent,
         action: NudgeAction.openStudy,
-        icon: '🚨',
+        icon: Icons.warning_amber_rounded,
       );
     }
 
@@ -85,7 +86,7 @@ class ProactiveEngine {
         message: 'Ready to start studying? Create your first deck to get started.',
         type: NudgeType.suggestion,
         action: NudgeAction.openStudy,
-        icon: '🌅',
+        icon: Icons.wb_twilight_rounded,
       );
     }
 
@@ -95,7 +96,7 @@ class ProactiveEngine {
         message: '$dueCards cards are due for review. Start your day strong!',
         type: NudgeType.important,
         action: NudgeAction.startReview,
-        icon: '📚',
+        icon: Icons.menu_book_rounded,
       );
     }
 
@@ -105,7 +106,7 @@ class ProactiveEngine {
         message: 'You have $dueCards cards ready for review. A 5-minute session can make a big difference!',
         type: NudgeType.gentle,
         action: NudgeAction.startReview,
-        icon: '☀️',
+        icon: Icons.wb_sunny_rounded,
       );
     }
 
@@ -114,7 +115,7 @@ class ProactiveEngine {
       message: 'All caught up on reviews. Keep building your knowledge — scan some notes or take a quiz!',
       type: NudgeType.celebration,
       action: NudgeAction.openChat,
-      icon: '🎯',
+      icon: Icons.check_circle_outline_rounded,
     );
   }
 
@@ -125,7 +126,7 @@ class ProactiveEngine {
         message: '$dueCards cards are piling up. Even reviewing 5 cards helps!',
         type: NudgeType.suggestion,
         action: NudgeAction.startReview,
-        icon: '💡',
+        icon: Icons.lightbulb_outline_rounded,
       );
     }
 
@@ -135,7 +136,7 @@ class ProactiveEngine {
         message: '$closestExamDays days left. Take a quick quiz to test yourself!',
         type: NudgeType.important,
         action: NudgeAction.startQuiz,
-        icon: '🧠',
+        icon: Icons.psychology_rounded,
       );
     }
 
@@ -149,7 +150,7 @@ class ProactiveEngine {
         message: 'You scored ${lastQuizScore.toStringAsFixed(0)}% on your last quiz. Keep this momentum going!',
         type: NudgeType.celebration,
         action: NudgeAction.openStudy,
-        icon: '🌟',
+        icon: Icons.star_rounded,
       );
     }
 
@@ -159,7 +160,7 @@ class ProactiveEngine {
         message: 'Reviewing before sleep improves memory retention. $dueCards cards waiting.',
         type: NudgeType.gentle,
         action: NudgeAction.startReview,
-        icon: '🌙',
+        icon: Icons.nightlight_round,
       );
     }
 
@@ -168,7 +169,7 @@ class ProactiveEngine {
       message: 'You\'re all caught up. Rest well — your brain consolidates learning during sleep!',
       type: NudgeType.celebration,
       action: NudgeAction.dismiss,
-      icon: '✅',
+      icon: Icons.task_alt_rounded,
     );
   }
 
@@ -251,7 +252,7 @@ class ProactiveNudge {
   final String message;
   final NudgeType type;
   final NudgeAction action;
-  final String icon;
+  final IconData icon;
 
   const ProactiveNudge({
     required this.title,

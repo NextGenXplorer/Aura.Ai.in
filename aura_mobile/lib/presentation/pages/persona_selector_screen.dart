@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:aura_mobile/domain/entities/persona.dart';
 import 'package:aura_mobile/presentation/providers/persona_provider.dart';
+import 'package:aura_mobile/presentation/providers/chat_provider.dart';
 
 class PersonaSelectorScreen extends ConsumerWidget {
   const PersonaSelectorScreen({super.key});
@@ -47,14 +48,21 @@ class PersonaSelectorScreen extends ConsumerWidget {
   Widget _personaCard(BuildContext context, WidgetRef ref, Persona persona, bool isActive) {
     return GestureDetector(
       onTap: () {
-        ref.read(personaProvider.notifier).setPersona(persona.id);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${persona.emoji} Switched to ${persona.name}'),
-            duration: const Duration(seconds: 2),
-            backgroundColor: persona.accentColor.withValues(alpha: 0.8),
-          ),
-        );
+        // Only act if switching to a different persona
+        if (!isActive) {
+          ref.read(personaProvider.notifier).setPersona(persona.id);
+          // Start a fresh chat so old conversation context doesn't bleed into new persona
+          ref.read(chatProvider.notifier).clearChat();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Switched to ${persona.name} — new chat started'),
+              duration: const Duration(seconds: 2),
+              backgroundColor: persona.accentColor.withValues(alpha: 0.8),
+            ),
+          );
+          // Go back to chat screen
+          Navigator.pop(context);
+        }
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 300),
@@ -72,18 +80,20 @@ class PersonaSelectorScreen extends ConsumerWidget {
         ),
         child: Row(
           children: [
-            // Emoji avatar
+            // Icon avatar
             Container(
-              width: 52,
-              height: 52,
+              width: 48,
+              height: 48,
               decoration: BoxDecoration(
-                color: persona.accentColor.withValues(alpha: 0.15),
+                color: persona.accentColor.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: persona.accentColor.withValues(alpha: 0.25)),
               ),
               child: Center(
-                child: Text(
-                  persona.emoji,
-                  style: const TextStyle(fontSize: 26),
+                child: Icon(
+                  persona.icon,
+                  color: persona.accentColor,
+                  size: 22,
                 ),
               ),
             ),

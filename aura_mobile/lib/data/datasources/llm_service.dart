@@ -59,54 +59,77 @@ class LLMServiceImpl implements LLMService {
       temperature: temperature,
     );
 
-    // For small models: apply post-processing to clean up common hallucination artifacts
-    if (modelTier.isSmall) {
-      return _cleanSmallModelOutput(raw);
-    }
-    return raw;
+    // Apply output cleaning to ALL models — even large models can leak
+    // stop tokens like <|endoftext|>, Human:, User: etc.
+    return _cleanModelOutput(raw);
   }
 
-  /// Lightweight post-processing for small model output.
-  /// Only checks for token-level repetition (O(1) per token) and leaked
-  /// prompt markers (checked only on the token itself, not the full buffer).
-  Stream<String> _cleanSmallModelOutput(Stream<String> raw) async* {
+  /// Post-processing for model output — catches hallucinated conversation
+  /// continuations and repetition loops that all model sizes can produce.
+  Stream<String> _cleanModelOutput(Stream<String> raw) async* {
     int repeatCount = 0;
     String lastToken = '';
-    // Track last few sentences cheaply for repetition detection
     final recentSentences = <String>[];
     final sentenceBuffer = StringBuffer();
+    // Buffer to detect multi-token stop sequences like "<|" + "endoftext" + "|>"
+    final tokenWindow = StringBuffer();
 
     await for (final token in raw) {
-      // 1. Token-level repeat detection — O(1)
+      // 1. Token-level repeat detection
       if (token == lastToken && token.trim().isNotEmpty) {
         repeatCount++;
-        if (repeatCount >= 4) break; // Stuck in loop
+        if (repeatCount >= 4) break;
       } else {
         repeatCount = 0;
       }
       lastToken = token;
 
-      // 2. Check leaked markers on the token itself — O(1), no buffer scan
-      if (token.contains('<|im_') ||
-          token.contains('ASSISTANT RESPONSE') ||
-          token.contains('USER REQUEST')) {
+      // 2. Build a sliding window to catch multi-token stop sequences
+      tokenWindow.write(token);
+      final window = tokenWindow.toString();
+
+      // Check for leaked markers that signal the model is hallucinating new turns
+      if (window.contains('<|endoftext|>') ||
+          window.contains('<|im_end|>') ||
+          window.contains('<|im_start|>') ||
+          window.contains('Human:') ||
+          window.contains('User:') ||
+          window.contains('ASSISTANT RESPONSE') ||
+          window.contains('USER REQUEST') ||
+          window.contains('CURRENT USER REQUEST')) {
+        // Yield everything BEFORE the marker, then stop
+        final cutPoints = ['<|endoftext|>', '<|im_end|>', '<|im_start|>', 'Human:', 'User:', 'ASSISTANT RESPONSE', 'USER REQUEST', 'CURRENT USER REQUEST'];
+        for (final cut in cutPoints) {
+          final idx = window.indexOf(cut);
+          if (idx >= 0) {
+            // Only yield the clean part before the marker (from this token)
+            final cleanPart = token.substring(0, token.length - (window.length - idx));
+            if (cleanPart.isNotEmpty) yield cleanPart;
+            return; // Stop generation
+          }
+        }
         break;
       }
 
-      // 3. Cheap sentence-level repeat check — only on sentence boundaries
+      // Keep window small — only last 50 chars needed for detection
+      if (tokenWindow.length > 50) {
+        final str = tokenWindow.toString();
+        tokenWindow.clear();
+        tokenWindow.write(str.substring(str.length - 30));
+      }
+
+      // 3. Sentence-level repeat check (catches paragraph loops)
       sentenceBuffer.write(token);
       if (token.contains('.') || token.contains('!') || token.contains('?') || token.contains('\n')) {
         final sentence = sentenceBuffer.toString().trim();
         if (sentence.length > 15) {
-          // Count how many recent sentences match
           int matches = 0;
           for (final s in recentSentences) {
             if (s == sentence) matches++;
           }
-          if (matches >= 2) break; // Same sentence 3rd time (2 in history + current)
+          if (matches >= 2) break;
 
           recentSentences.add(sentence);
-          // Only keep last 6 sentences in memory
           if (recentSentences.length > 6) {
             recentSentences.removeAt(0);
           }

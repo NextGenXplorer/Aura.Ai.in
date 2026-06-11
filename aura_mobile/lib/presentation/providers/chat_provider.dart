@@ -237,6 +237,17 @@ class ChatNotifier extends StateNotifier<ChatState> {
           continue; // Don't show the marker in the assistant response
         }
         fullResponse += chunk;
+
+        // Anti-hallucination: check the FULL accumulated response for leaked
+        // stop markers / fake conversation turns. If found, truncate and stop.
+        final cleaned = _truncateAtHallucination(fullResponse);
+        if (cleaned != null) {
+          fullResponse = cleaned;
+          _updateLastMessage(fullResponse);
+          print('ChatNotifier: Hallucination marker detected — truncated response');
+          break; // Stop consuming the stream entirely
+        }
+
         _updateLastMessage(fullResponse);
       }
       print('ChatNotifier: Stream completed. Full response length: ${fullResponse.length}');
@@ -244,7 +255,35 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     } catch (e) {
       print('Error in sendMessage: $e');
-      _updateLastMessage('Error processing request: $e');
+      // Only show error if we have no partial response — otherwise keep what was generated
+      final lastMsg = state.messages.isNotEmpty ? state.messages.last : null;
+      final hasContent = lastMsg != null && 
+          lastMsg['role'] == 'assistant' && 
+          (lastMsg['content'] ?? '').trim().isNotEmpty;
+      if (!hasContent) {
+        // Retry once before giving up
+        try {
+          print('ChatNotifier: Retrying inference...');
+          await Future.delayed(const Duration(milliseconds: 500));
+          final orchestrator = _ref.read(orchestratorServiceProvider);
+          final retryStream = orchestrator.processMessage(
+            message: text,
+            chatHistory: [],
+            hasDocuments: false,
+          );
+          String retryResponse = '';
+          await for (final chunk in retryStream) {
+            retryResponse += chunk;
+            _updateLastMessage(retryResponse);
+          }
+          if (retryResponse.isEmpty) {
+            _updateLastMessage('The AI model is having trouble responding. Try restarting the app or using a simpler prompt.');
+          }
+        } catch (retryError) {
+          print('ChatNotifier: Retry also failed: $retryError');
+          _updateLastMessage('The AI model is having trouble responding. Try restarting the app or using a simpler prompt.');
+        }
+      }
     } finally {
       state = state.copyWith(isThinking: false);
       _isProcessing = false; // Release mutex
@@ -252,6 +291,41 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
 
+
+  /// Detects hallucinated stop markers / fake conversation turns in the full
+  /// accumulated response. Returns the truncated clean text if a marker is
+  /// found, or null if the response is still clean.
+  static final List<String> _hallucinationMarkers = [
+    '<|endoftext|>',
+    '<|im_end|>',
+    '<|im_start|>',
+    '<|end|>',
+    '\nHuman:',
+    '\nUser:',
+    '\nHuman :',
+    '\nUser :',
+    'Human: ',
+    'User: ',
+    '\nAssistant:',
+    'CURRENT USER REQUEST',
+    'ASSISTANT RESPONSE',
+    'USER REQUEST',
+    '__DISMISS__',
+  ];
+
+  String? _truncateAtHallucination(String response) {
+    int earliestIdx = -1;
+    for (final marker in _hallucinationMarkers) {
+      final idx = response.indexOf(marker);
+      if (idx >= 0 && (earliestIdx == -1 || idx < earliestIdx)) {
+        earliestIdx = idx;
+      }
+    }
+    if (earliestIdx >= 0) {
+      return response.substring(0, earliestIdx).trimRight();
+    }
+    return null;
+  }
 
   void _updateLastMessage(String newContent) {
     final newMessages = List<Map<String, String>>.from(state.messages);
@@ -269,20 +343,142 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   Future<void> startListening() async {
     final voiceService = _ref.read(voiceServiceProvider);
-    await voiceService.initialize();
+
+    // Ensure initialized
+    final ok = await voiceService.initialize();
+    if (!ok) {
+      print('VoiceService initialization failed');
+      return;
+    }
+
     state = state.copyWith(isListening: true, partialVoiceText: '');
-    
+
     await voiceService.startListening(onResult: (text, isFinal) {
-      if (text.isNotEmpty) {
-        if (isFinal) {
-          state = state.copyWith(isListening: false, partialVoiceText: '');
-          sendMessage(text);
-          stopListening();
-        } else {
-          state = state.copyWith(partialVoiceText: text);
-        }
+      if (isFinal && text.isNotEmpty) {
+        // Got final text — stop listening, send message, speak response, then listen again
+        state = state.copyWith(isListening: false, partialVoiceText: '');
+        _sendSpeakAndListenAgain(text);
+      } else if (text.isNotEmpty) {
+        // Partial — update live text
+        state = state.copyWith(partialVoiceText: text);
       }
     });
+  }
+
+  /// Voice conversation loop: Send → Get AI response → Speak it → Listen again.
+  /// This creates a continuous back-and-forth conversation experience.
+  bool _isVoiceConversationActive = false;
+
+  Future<void> _sendSpeakAndListenAgain(String text) async {
+    _isVoiceConversationActive = true;
+
+    // 1. Add User Message
+    final modelState = _ref.read(modelSelectorProvider);
+    if (modelState.activeModelId == null || state.isModelLoading) {
+      _isVoiceConversationActive = false;
+      return;
+    }
+
+    if (_isProcessing) {
+      _isVoiceConversationActive = false;
+      return;
+    }
+    _isProcessing = true;
+
+    // Sync persona
+    try {
+      final persona = _ref.read(personaProvider).activePersona;
+      final contextBuilder = _ref.read(contextBuilderServiceProvider);
+      contextBuilder.personaSystemPrompt = persona.systemPrompt;
+    } catch (_) {}
+
+    state = state.copyWith(
+      messages: [...state.messages, {'role': 'user', 'content': text}],
+      isThinking: true,
+    );
+    _saveChat();
+
+    state = state.copyWith(
+      messages: [...state.messages, {'role': 'assistant', 'content': ''}],
+    );
+
+    String fullResponse = '';
+    try {
+      final orchestrator = _ref.read(orchestratorServiceProvider);
+      final history = state.messages
+          .where((m) => m['role'] == 'user' || m['role'] == 'assistant')
+          .map((m) => "${m['role'] == 'user' ? 'User' : 'Assistant'}: ${m['content']}")
+          .toList();
+      final limitedHistory = history.length > 3 ? history.sublist(history.length - 3) : history;
+
+      final stream = orchestrator.processMessage(
+        message: text,
+        chatHistory: limitedHistory,
+        hasDocuments: false,
+        isVoiceQuery: true,
+      );
+
+      await for (final chunk in stream) {
+        fullResponse += chunk;
+
+        // If action completed (app opened, search done) — stop voice loop
+        if (fullResponse.contains('__DISMISS__')) {
+          fullResponse = fullResponse.replaceAll('__DISMISS__', '').trim();
+          _updateLastMessage(fullResponse);
+          _isVoiceConversationActive = false; // Stop the listen loop
+          break;
+        }
+
+        // Anti-hallucination check
+        final cleaned = _truncateAtHallucination(fullResponse);
+        if (cleaned != null) {
+          fullResponse = cleaned;
+          _updateLastMessage(fullResponse);
+          break;
+        }
+        _updateLastMessage(fullResponse);
+      }
+
+      _saveChat();
+    } catch (e) {
+      print('Voice sendMessage error: $e');
+      if (fullResponse.isEmpty) {
+        fullResponse = "Sorry, I couldn't process that. Try again.";
+        _updateLastMessage(fullResponse);
+      }
+    } finally {
+      state = state.copyWith(isThinking: false);
+      _isProcessing = false;
+    }
+
+    // 2. Speak the response
+    if (fullResponse.isNotEmpty && _isVoiceConversationActive) {
+      try {
+        print('VOICE: Speaking response (${fullResponse.length} chars)');
+        final voiceService = _ref.read(voiceServiceProvider);
+        await voiceService.speak(fullResponse);
+        print('VOICE: TTS done');
+      } catch (e) {
+        print('VOICE: TTS failed: $e');
+      }
+    }
+
+    // 3. Automatically start listening again for continuous conversation
+    if (_isVoiceConversationActive) {
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (_isVoiceConversationActive) {
+        startListening();
+      }
+    }
+  }
+
+  /// Stop the continuous voice conversation loop
+  void stopVoiceConversation() {
+    _isVoiceConversationActive = false;
+    final voiceService = _ref.read(voiceServiceProvider);
+    voiceService.stopListening();
+    voiceService.stopSpeaking();
+    state = state.copyWith(isListening: false);
   }
 
   void clearChat() {

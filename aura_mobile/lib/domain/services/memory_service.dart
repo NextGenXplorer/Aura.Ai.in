@@ -124,7 +124,10 @@ class MemoryService {
     }
   }
 
-  /// Retrieve relevant memories with robust error handling and fallbacks
+  /// Retrieve relevant memories with robust error handling and fallbacks.
+  /// 
+  /// Performance optimization: Uses keyword pre-filtering before vector search
+  /// to avoid scanning all memories when the DB grows large.
   Future<List<String>> retrieveRelevantMemories(
     String query, {
     int limit = 3,
@@ -136,20 +139,31 @@ class MemoryService {
     }
 
     try {
-      // 1. Fetch all memories (with error handling)
-      List<Memory> allMemories;
+      // 1. Try keyword search first (cheap, indexed by SQLite)
+      List<Memory> candidates;
       try {
-        allMemories = await _repository.getMemories();
+        candidates = await _repository.searchMemories(query);
       } catch (e) {
-        throw StorageException.databaseError('getMemories', e);
+        // Fallback to fetching all if keyword search fails
+        _errorHandler.logWarning('Keyword pre-filter failed: $e, fetching all');
+        try {
+          candidates = await _repository.getMemories();
+        } catch (e2) {
+          throw StorageException.databaseError('getMemories', e2);
+        }
       }
 
-      if (allMemories.isEmpty) {
-        _errorHandler.logDebug('No memories found in database');
+      if (candidates.isEmpty) {
+        _errorHandler.logDebug('No memory candidates found');
         return [];
       }
 
-      // 2. Try vector search first (if model is loaded)
+      // 2. If candidates are few enough, just return keyword results (fast path)
+      if (candidates.length <= limit) {
+        return candidates.map((m) => m.content).toList();
+      }
+
+      // 3. Try vector re-ranking on the keyword candidates (not ALL memories)
       if (_aiService.isModelLoaded) {
         try {
           final queryEmbedding = await _errorHandler.executeWithRetry(
@@ -161,48 +175,30 @@ class MemoryService {
           if (queryEmbedding != null && queryEmbedding.isNotEmpty) {
             final vectorResults = _performVectorSearch(
               queryEmbedding,
-              allMemories,
+              candidates, // Re-rank only the keyword-filtered candidates
               limit,
             );
 
             if (vectorResults.isNotEmpty) {
               _errorHandler.logDebug(
-                'Vector search returned ${vectorResults.length} results',
+                'Vector re-rank returned ${vectorResults.length} results from ${candidates.length} candidates',
               );
               return vectorResults;
             }
           }
         } catch (e) {
-          _errorHandler.logWarning('Vector search failed: $e. Falling back to keyword search.');
+          _errorHandler.logWarning('Vector re-ranking failed: $e. Using keyword results.');
         }
-      } else {
-        _errorHandler.logDebug('Model not loaded. Using keyword search.');
       }
 
-      // 3. Fallback to keyword search
-      try {
-        final keywordResults = await _repository.searchMemories(query);
-        final results = keywordResults
-            .take(limit)
-            .map((m) => m.content)
-            .toList();
-
-        _errorHandler.logDebug(
-          'Keyword search returned ${results.length} results',
-        );
-        return results;
-      } catch (e) {
-        // Keyword search is already a fallback, so if it fails, return empty list
-        _errorHandler.logWarning('Keyword search also failed: $e');
-        return [];
-      }
+      // 4. Fallback: return top keyword results
+      return candidates.take(limit).map((m) => m.content).toList();
     } catch (e) {
       if (e is AuraException) {
         _errorHandler.handleError(e);
         rethrow;
       }
 
-      // Return empty list rather than failing completely
       _errorHandler.logWarning('Memory retrieval failed: $e');
       return [];
     }

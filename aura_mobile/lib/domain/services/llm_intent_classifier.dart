@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:aura_mobile/data/datasources/llm_service.dart';
 import 'package:aura_mobile/domain/services/intent_detection_service.dart';
@@ -57,22 +58,43 @@ class LLMIntentClassifier {
       '"what is quantum physics" -> NORMAL_CHAT';
 
   /// Classify a user message using the on-device LLM.
-  /// Returns `null` if the model is not loaded or classification fails.
+  /// Returns `null` if the model is not loaded, classification fails, or times out.
+  ///
+  /// Performance: Capped at 5 seconds to avoid blocking the chat response.
+  /// If classification takes longer, we fall through to normalChat (fast path).
   Future<ClassifiedIntent?> classify(String message) async {
     if (!_llmService.isModelLoaded) {
       debugPrint('LLM_CLASSIFIER: Model not loaded, skipping');
       return null;
     }
 
+    // Fast-path: skip LLM for very short messages (greetings, single words)
+    final trimmed = message.trim().toLowerCase();
+    if (trimmed.length < 4 || _isGreeting(trimmed)) {
+      debugPrint('LLM_CLASSIFIER: Short/greeting message, skipping classification');
+      return ClassifiedIntent(IntentType.normalChat);
+    }
+
     try {
       final buffer = StringBuffer();
+
+      // Timeout: abort classification if it takes > 5 seconds.
+      // On-device LLM with maxTokens=30 should complete in <3s on most devices.
       await for (final token in _llmService.chat(
         message,
         systemPrompt: _systemPrompt,
-        maxTokens: 30,
-        temperature: 0.1, // Very low temperature for deterministic classification
+        maxTokens: 20, // Reduced from 30 — classification output is always short
+        temperature: 0.1,
+      ).timeout(
+        const Duration(seconds: 5),
+        onTimeout: (sink) {
+          debugPrint('LLM_CLASSIFIER: Timed out after 5s, falling back to normalChat');
+          sink.close();
+        },
       )) {
         buffer.write(token);
+        // Early exit: if we already have a pipe-separated result, stop consuming
+        if (buffer.length > 3 && buffer.toString().contains('\n')) break;
       }
 
       final raw = buffer.toString().trim();
@@ -82,6 +104,12 @@ class LLMIntentClassifier {
       debugPrint('LLM_CLASSIFIER: Error during classification: $e');
       return null;
     }
+  }
+
+  /// Fast check for common greetings that never need classification.
+  bool _isGreeting(String text) {
+    const greetings = {'hi', 'hey', 'hello', 'yo', 'sup', 'thanks', 'thank you', 'ok', 'okay', 'bye', 'good', 'gm', 'gn'};
+    return greetings.contains(text) || text.startsWith('hi ') || text.startsWith('hey ') || text.startsWith('hello ');
   }
 
   /// Parse the LLM output into a ClassifiedIntent.

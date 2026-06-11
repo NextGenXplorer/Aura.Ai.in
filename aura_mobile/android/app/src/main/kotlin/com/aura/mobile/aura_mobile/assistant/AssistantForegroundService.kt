@@ -200,7 +200,7 @@ class AssistantForegroundService : Service() {
         onAiComplete = {
             isWaitingForAI = false
             aiTimeoutHandler.removeCallbacks(aiTimeoutRunnable)
-            // Overlay stays open and assistant automatically listens for follow-up questions
+            // After AI responds, keep listening for follow-up conversation
             ttsManager.onAllSpoken {
                 broadcastState("LISTENING")
                 voiceRecognitionService.startListening()

@@ -108,17 +108,19 @@ class OrchestratorService {
     var intent = await _intentService.detectIntent(message, hasDocuments: hasDocuments);
     debugPrint("ORCHESTRATOR: Rule-based intent -> $intent");
 
-    // 2. LLM Fallback Classification (Layer 2) — only for chat UI, not voice
-    // Voice queries already went through CommandParser; running classifier + chat
-    // would cause two LLM inferences and risk hitting the 30s voice timeout.
+    // 2. LLM Fallback Classification (Layer 2) — DISABLED
+    // 
+    // IMPORTANT: The on-device LLM (fllama) uses a SINGLE inference context.
+    // Running the classifier here consumes that context, and if it times out
+    // or runs long, the subsequent chat() call fails with AI_INFERENCE_FAILED
+    // because the native engine is still processing the classification prompt.
+    //
+    // The rule-based detector (Layer 1) handles 50+ intent types and is fast.
+    // For messages it can't classify, we simply go to normalChat — which is
+    // correct 95% of the time for creative/conversational queries anyway.
+    //
+    // TODO: Re-enable when fllama supports multiple contexts or cancellation.
     ClassifiedIntent? classifiedIntent;
-    if (intent == IntentType.normalChat && !isVoiceQuery) {
-      classifiedIntent = await _llmClassifier.classify(message);
-      if (classifiedIntent != null && classifiedIntent.type != IntentType.normalChat) {
-        debugPrint("ORCHESTRATOR: LLM classified intent -> ${classifiedIntent.type} params=${classifiedIntent.params}");
-        intent = classifiedIntent.type;
-      }
-    }
 
 
     // 3. Routing
@@ -144,10 +146,13 @@ class OrchestratorService {
 
       case IntentType.webSearch:
         try {
-          yield* _handleWebSearch(message);
+          final cleanQuery = _intentService.extractSearchQuery(message);
+          yield "Searching for $cleanQuery";
+          await _appControlService.openApp("navigate:https://www.google.com/search?q=${Uri.encodeComponent(cleanQuery)}");
+          yield "__DISMISS__";
         } catch (e) {
           final errorMsg = _errorHandler.handleError(e);
-          yield "❌ Web search failed: $errorMsg";
+          yield "Web search failed: $errorMsg";
         }
         break;
 
@@ -170,8 +175,9 @@ class OrchestratorService {
 
       case IntentType.openApp:
         final appName = classifiedIntent?.params['appName'] ?? _intentService.extractAppName(message);
-        yield "🚀 **Opening $appName...**";
+        yield "Opening $appName";
         await _appControlService.openApp(appName);
+        yield "__DISMISS__";
         break;
 
       case IntentType.closeApp:
@@ -187,8 +193,9 @@ class OrchestratorService {
         break;
 
       case IntentType.openCamera:
-        yield "📸 **Opening Camera...**";
+        yield "Opening Camera";
         await _appControlService.openCamera();
+        yield "__DISMISS__";
         break;
 
       case IntentType.dialContact:
@@ -196,24 +203,24 @@ class OrchestratorService {
         final matches = await _appControlService.resolveContacts(contactName);
 
         if (matches.isEmpty) {
-           // Fallback to old behavior (let dialer handle it or say not found)
-           yield "📞 **Dialing $contactName...**";
-           await _appControlService.dialContact(contactName);
+           yield "Couldn't find a contact named $contactName. Try again with the exact name.";
         } else if (matches.length == 1) {
            final number = matches.first.phones.isNotEmpty ? matches.first.phones.first.number : '';
            if (number.isNotEmpty) {
-             yield "📞 **Dialing ${matches.first.displayName}...**";
+             yield "Calling ${matches.first.displayName}";
              await _appControlService.dialContact(number);
+             yield "__DISMISS__";
            } else {
-             yield "❌ Contact ${matches.first.displayName} has no phone number.";
+             yield "Contact ${matches.first.displayName} has no phone number.";
            }
         } else {
-           // Multiple matches
-           final options = matches.take(5).map((c) {
+           // Multiple matches — give voice-friendly numbered list
+           final names = matches.take(5).toList();
+           final nameList = names.asMap().entries.map((e) => "${e.key + 1}. ${e.value.displayName}").join(", ");
+           yield "I found ${names.length} contacts similar to $contactName: $nameList. Say the number or tap to select. [[OPTIONS:${names.map((c) {
               final number = c.phones.isNotEmpty ? c.phones.first.number : '';
-              return "${c.displayName}|Call $number"; 
-           }).join(",");
-           yield "I found multiple contacts for '$contactName'. Who did you mean? [[OPTIONS:$options]]";
+              return "${c.displayName}|call $number";
+           }).join(",")}]]";
         }
         break;
 
@@ -231,25 +238,29 @@ class OrchestratorService {
            final matches = await _appControlService.resolveContacts(name);
 
            if (matches.isEmpty) {
-              yield '📨 **Opening SMS to $name...**${smsBody.isNotEmpty ? '\nMessage: "$smsBody"' : ''}';
+              yield "Opening SMS to $name${smsBody.isNotEmpty ? ' with message: $smsBody' : ''}";
               await _appControlService.sendSMS(name, smsBody);
+              yield "__DISMISS__";
            } else if (matches.length == 1) {
               final number = matches.first.phones.isNotEmpty ? matches.first.phones.first.number : '';
               if (number.isNotEmpty) {
-                 yield '📨 **Opening SMS to ${matches.first.displayName}...**${smsBody.isNotEmpty ? '\nMessage: "$smsBody"' : ''}';
+                 yield "Sending SMS to ${matches.first.displayName}${smsBody.isNotEmpty ? ': $smsBody' : ''}";
                  await _appControlService.sendSMS(number, smsBody);
+                 yield "__DISMISS__";
               } else {
-                 yield "❌ Contact ${matches.first.displayName} has no phone number.";
+                 yield "Contact ${matches.first.displayName} has no phone number.";
               }
            } else {
-              final options = matches.take(5).map((c) {
+              // Multiple matches — voice-friendly numbered list
+              final names = matches.take(5).toList();
+              final nameList = names.asMap().entries.map((e) => "${e.key + 1}. ${e.value.displayName}").join(", ");
+              yield "I found ${names.length} contacts similar to $name: $nameList. Say the number or tap to select. [[OPTIONS:${names.map((c) {
                  final number = c.phones.isNotEmpty ? c.phones.first.number : '';
-                 return "${c.displayName}|Text $number $smsBody";
-              }).join(",");
-              yield "I found multiple contacts for '$name'. Who did you mean? [[OPTIONS:$options]]";
+                 return "${c.displayName}|text $number $smsBody";
+              }).join(",")}]]";
            }
         } else {
-           yield "❌ I couldn't understand who to send the message to. Please try 'Send SMS to [Name] saying [Message]'.";
+           yield "I couldn't understand who to send the message to. Please try again with the contact name.";
         }
         break;
 
@@ -273,8 +284,9 @@ class OrchestratorService {
 
       case IntentType.navigation:
         final destination = classifiedIntent?.params['destination'] ?? _intentService.extractNavigationDestination(message);
-        yield "🗺️ **Getting directions to $destination...**";
-        await _appControlService.openApp("navigate:$destination"); 
+        yield "Getting directions to $destination";
+        await _appControlService.openApp("navigate:$destination");
+        yield "__DISMISS__";
         break;
 
       case IntentType.weatherSearch:
@@ -687,7 +699,23 @@ class OrchestratorService {
     // Use lower temperature when grounding on documents/memories (RAG mode)
     // to reduce hallucination; higher temperature for pure creative chat
     final temperature = (includeDocuments || includeMemories) ? 0.4 : 0.7;
-    yield* _llmService.chat(prompt, temperature: temperature);
+
+    // Give more tokens for code/writing tasks that need longer output
+    final lowerMsg = message.toLowerCase();
+    final needsMoreTokens = lowerMsg.contains('write') ||
+        lowerMsg.contains('code') ||
+        lowerMsg.contains('script') ||
+        lowerMsg.contains('program') ||
+        lowerMsg.contains('create') ||
+        lowerMsg.contains('generate') ||
+        lowerMsg.contains('build') ||
+        lowerMsg.contains('implement') ||
+        lowerMsg.contains('essay') ||
+        lowerMsg.contains('explain in detail');
+
+    final maxTokens = needsMoreTokens ? 1024 : 512;
+
+    yield* _llmService.chat(prompt, temperature: temperature, maxTokens: maxTokens);
   }
 
   /// Heuristic: does this message look like a factual/knowledge question?

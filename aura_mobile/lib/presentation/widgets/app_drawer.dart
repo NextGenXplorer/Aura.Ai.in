@@ -3,11 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:aura_mobile/presentation/providers/user_provider.dart';
 import 'package:aura_mobile/presentation/providers/chat_provider.dart';
-import 'package:aura_mobile/presentation/providers/chat_history_provider.dart'; // New Import
+import 'package:aura_mobile/presentation/providers/chat_history_provider.dart';
 import 'package:aura_mobile/core/services/voice_assistant_service.dart';
 import 'package:aura_mobile/presentation/pages/model_selector_screen.dart';
 import 'package:aura_mobile/presentation/pages/voice_assistant_settings_page.dart';
-import 'package:intl/intl.dart'; // For date formatting
+import 'package:intl/intl.dart';
 import 'package:aura_mobile/core/providers/repository_providers.dart';
 import 'package:aura_mobile/presentation/pages/study_dashboard_screen.dart';
 import 'package:aura_mobile/presentation/pages/camera_scan_screen.dart';
@@ -22,235 +22,219 @@ class AppDrawer extends ConsumerWidget {
     final userState = ref.watch(userProvider);
 
     return Drawer(
-      backgroundColor: const Color(0xFF1a1a20), // Dark Obsidian
-      child: SafeArea( // Ensure content is not hidden by status bar
-        child: Column(
-          children: [
-            // 1. User Profile Header
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-              decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: Colors.white10)),
-              ),
-              child: Row(
+      backgroundColor: const Color(0xFF0f0f13),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.horizontal(right: Radius.circular(20)),
+      ),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 20),
+
+              // ── Header: User + New Chat ──
+              Row(
                 children: [
                   CircleAvatar(
-                    radius: 20,
-                    backgroundColor: const Color(0xFFc69c3a), // Gold
+                    radius: 18,
+                    backgroundColor: const Color(0xFFc69c3a),
                     child: Text(
                       userState.value?.substring(0, 1).toUpperCase() ?? "U",
                       style: GoogleFonts.outfit(
                         fontWeight: FontWeight.bold,
                         color: Colors.black,
+                        fontSize: 14,
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       userState.value ?? "User",
                       style: GoogleFonts.outfit(
-                        fontSize: 18,
+                        fontSize: 16,
                         fontWeight: FontWeight.w600,
                         color: Colors.white,
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  _MiniIconButton(
+                    icon: Icons.add,
+                    onTap: () {
+                      ref.read(chatProvider.notifier).clearChat();
+                      Navigator.pop(context);
+                    },
+                    tooltip: 'New Chat',
+                  ),
                 ],
               ),
-            ),
 
-            // 2. Main Actions
-            ListTile(
-              leading: const Icon(Icons.add, color: Colors.white70),
-              title: Text("New Chat", style: GoogleFonts.outfit(color: Colors.white)),
-              onTap: () {
-                // TODO: Clear chat
-                Navigator.pop(context);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.school, color: Color(0xFFc69c3a)),
-              title: Text("Study Buddy", style: GoogleFonts.outfit(color: Color(0xFFc69c3a))),
-              subtitle: Text("Flashcards, Quizzes & Exams",
-                  style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11)),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const StudyDashboardScreen()),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.document_scanner_rounded, color: Color(0xFFc69c3a)),
-              title: Text("Scan & Capture", style: GoogleFonts.outfit(color: Color(0xFFc69c3a))),
-              subtitle: Text("OCR from camera or gallery",
-                  style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11)),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const CameraScanScreen()),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.image, color: Colors.white70),
-              title: Text("Generated Images", style: GoogleFonts.outfit(color: Colors.white)),
-              onTap: () {
-                // TODO: Navigate to gallery
-                Navigator.pop(context);
-              },
-            ),
+              const SizedBox(height: 24),
 
-            const Divider(color: Colors.white10),
-
-            // 3. Chat History (Real)
-            Expanded(
-              child: Consumer(
-                builder: (context, ref, child) {
-                  final historyAsync = ref.watch(chatHistoryProvider);
-
-                  return historyAsync.when(
-                    data: (sessions) {
-                      if (sessions.isEmpty) {
-                        return Center(
-                           child: Padding(
-                             padding: const EdgeInsets.all(20.0),
-                             child: Text(
-                              "No recent chats",
-                              style: GoogleFonts.outfit(color: Colors.white30, fontSize: 14),
-                             ),
-                           ),
-                        );
-                      }
-                      return ListView(
-                        padding: EdgeInsets.zero,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                            child: Text("Recent", style: GoogleFonts.outfit(color: Colors.white54, fontSize: 12)),
-                          ),
-                          ...sessions.map((session) => ListTile(
-                            dense: true,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-                            title: Text(
-                              session.title,
-                              style: GoogleFonts.outfit(color: Colors.white70),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text(
-                              _formatDate(session.lastModified),
-                              style: GoogleFonts.outfit(color: Colors.white30, fontSize: 10),
-                            ),
-                            onTap: () {
-                              ref.read(chatProvider.notifier).loadSession(session);
-                              Navigator.pop(context);
-                            },
-                            trailing: IconButton(
-                              icon: const Icon(Icons.delete_outline, size: 16, color: Colors.white30),
-                              onPressed: () async {
-                                 // Confirm delete or just delete
-                                 final repo = ref.read(chatHistoryRepositoryProvider);
-                                 await repo.deleteSession(session.id);
-                                 ref.invalidate(chatHistoryProvider);
-                              },
-                            ),
-                          )),
-                        ],
-                      );
+              // ── Quick Actions Row ──
+              Row(
+                children: [
+                  _QuickAction(
+                    icon: Icons.school_rounded,
+                    label: 'Study',
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const StudyDashboardScreen()));
                     },
-                    loading: () => const Center(child: CircularProgressIndicator(color:  Color(0xFFc69c3a), strokeWidth: 2)),
-                    error: (err, stack) => Center(child: Text("Error loading history", style: GoogleFonts.outfit(color: Colors.red))),
-                  );
-                },
+                  ),
+                  const SizedBox(width: 10),
+                  _QuickAction(
+                    icon: Icons.document_scanner_rounded,
+                    label: 'Scan',
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const CameraScanScreen()));
+                    },
+                  ),
+                  const SizedBox(width: 10),
+                  _QuickAction(
+                    icon: Icons.psychology_rounded,
+                    label: 'Model',
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const ModelSelectorScreen()));
+                    },
+                  ),
+                ],
               ),
-            ),
 
-            const Divider(color: Colors.white10),
+              const SizedBox(height: 20),
 
-            // 4. Voice Assistant Toggle — syncs with actual Android service state
-            StatefulBuilder(
-              builder: (context, setState) {
-                // Sync on first build to detect service still running after app restart
-                VoiceAssistantService.ensureSynced().then((_) {
-                  if (context.mounted) setState(() {});
-                });
-                return SwitchListTile(
-                  secondary: const Icon(Icons.record_voice_over, color: Color(0xFFc69c3a)),
-                  title: Text("Voice Assistant", style: GoogleFonts.outfit(color: Colors.white)),
-                  subtitle: Text(
-                      VoiceAssistantService.isRunning ? "Active" : "Inactive — tap to enable",
-                      style: GoogleFonts.outfit(color: Colors.white54, fontSize: 12)),
-                  value: VoiceAssistantService.isRunning,
-                  activeColor: const Color(0xFFc69c3a),
-                  onChanged: (bool value) async {
-                    if (value) {
-                      await VoiceAssistantService.startAssistant();
-                    } else {
-                      await VoiceAssistantService.stopAssistant();
-                    }
-                    setState(() {});
-                  },
-                );
-              }
-            ),
+              // ── Chat History ──
+              Text(
+                'Recent',
+                style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.5),
+              ),
+              const SizedBox(height: 8),
 
-            const Divider(color: Colors.white10),
+              Expanded(
+                child: Consumer(
+                  builder: (context, ref, child) {
+                    final historyAsync = ref.watch(chatHistoryProvider);
 
-            // 5. Footer (Model Selector & Settings)
-            // AI Persona Selector
-            Consumer(
-              builder: (context, ref, _) {
-                final persona = ref.watch(personaProvider).activePersona;
-                return ListTile(
-                  leading: Text(persona.emoji, style: const TextStyle(fontSize: 22)),
-                  title: Text("AI Persona: ${persona.name}", style: GoogleFonts.outfit(color: persona.accentColor)),
-                  subtitle: Text(persona.description,
-                      style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11)),
-                  trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.white38),
-                  onTap: () {
-                    Navigator.pop(context);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const PersonaSelectorScreen()),
+                    return historyAsync.when(
+                      data: (sessions) {
+                        if (sessions.isEmpty) {
+                          return Center(
+                            child: Text(
+                              "No chats yet",
+                              style: GoogleFonts.outfit(color: Colors.white24, fontSize: 13),
+                            ),
+                          );
+                        }
+                        return ListView.separated(
+                          padding: EdgeInsets.zero,
+                          itemCount: sessions.length,
+                          separatorBuilder: (context2, index2) => const SizedBox(height: 2),
+                          itemBuilder: (context, index) {
+                            final session = sessions[index];
+                            return _ChatHistoryTile(
+                              title: session.title,
+                              date: _formatDate(session.lastModified),
+                              onTap: () {
+                                ref.read(chatProvider.notifier).loadSession(session);
+                                Navigator.pop(context);
+                              },
+                              onDelete: () async {
+                                final repo = ref.read(chatHistoryRepositoryProvider);
+                                await repo.deleteSession(session.id);
+                                ref.invalidate(chatHistoryProvider);
+                              },
+                            );
+                          },
+                        );
+                      },
+                      loading: () => const Center(
+                        child: CircularProgressIndicator(color: Color(0xFFc69c3a), strokeWidth: 2),
+                      ),
+                      error: (err, stack) => Center(
+                        child: Text("Error loading history", style: GoogleFonts.outfit(color: Colors.red, fontSize: 12)),
+                      ),
                     );
                   },
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.psychology, color: Color(0xFFc69c3a)), // Gold Icon
-              title: Text("Switch Model", style: GoogleFonts.outfit(color: const Color(0xFFc69c3a))),
-              trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Color(0xFFc69c3a)),
-              onTap: () {
-                Navigator.pop(context); // Close drawer
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const ModelSelectorScreen()),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.settings, color: Colors.white70),
-              title: Text("Settings", style: GoogleFonts.outfit(color: Colors.white)),
-              subtitle: Text("Permissions & Gestures",
-                  style: GoogleFonts.outfit(color: Colors.white38, fontSize: 12)),
-              trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.white38),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const VoiceAssistantSettingsPage(),
-                  ),
-                );
-              },
-            ),
-            const SizedBox(height: 16),
-          ],
+                ),
+              ),
+
+              // ── Bottom Section ──
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                decoration: const BoxDecoration(
+                  border: Border(top: BorderSide(color: Colors.white10)),
+                ),
+                child: Column(
+                  children: [
+                    // Voice Assistant
+                    _DrawerTile(
+                      icon: Icons.mic_rounded,
+                      title: 'Voice Assistant',
+                      trailing: StatefulBuilder(
+                        builder: (context, setState) {
+                          VoiceAssistantService.ensureSynced().then((_) {
+                            if (context.mounted) setState(() {});
+                          });
+                          return SizedBox(
+                            height: 28,
+                            width: 44,
+                            child: FittedBox(
+                              child: Switch(
+                                value: VoiceAssistantService.isRunning,
+                                activeThumbColor: const Color(0xFFc69c3a),
+                                onChanged: (value) async {
+                                  if (value) {
+                                    await VoiceAssistantService.startAssistant();
+                                  } else {
+                                    await VoiceAssistantService.stopAssistant();
+                                  }
+                                  setState(() {});
+                                },
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+
+                    // Persona
+                    Consumer(
+                      builder: (context, ref, _) {
+                        final persona = ref.watch(personaProvider).activePersona;
+                        return _DrawerTile(
+                          icon: persona.icon,
+                          iconColor: persona.accentColor,
+                          title: persona.name,
+                          onTap: () {
+                            Navigator.pop(context);
+                            Navigator.push(context, MaterialPageRoute(builder: (_) => const PersonaSelectorScreen()));
+                          },
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 4),
+
+                    // Settings
+                    _DrawerTile(
+                      icon: Icons.settings_rounded,
+                      title: 'Settings',
+                      onTap: () {
+                        Navigator.pop(context);
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => const VoiceAssistantSettingsPage()));
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
         ),
       ),
     );
@@ -267,5 +251,162 @@ class AppDrawer extends ConsumerWidget {
     } else {
       return DateFormat('MMM d').format(date);
     }
+  }
+}
+
+// ── Minimal Quick Action Button ──
+class _QuickAction extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _QuickAction({required this.icon, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1a1a22),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white10),
+          ),
+          child: Column(
+            children: [
+              Icon(icon, color: const Color(0xFFc69c3a), size: 20),
+              const SizedBox(height: 6),
+              Text(
+                label,
+                style: GoogleFonts.outfit(color: Colors.white60, fontSize: 11, fontWeight: FontWeight.w500),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Chat History Tile ──
+class _ChatHistoryTile extends StatelessWidget {
+  final String title;
+  final String date;
+  final VoidCallback onTap;
+  final VoidCallback onDelete;
+
+  const _ChatHistoryTile({
+    required this.title,
+    required this.date,
+    required this.onTap,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    date,
+                    style: GoogleFonts.outfit(color: Colors.white24, fontSize: 10),
+                  ),
+                ],
+              ),
+            ),
+            GestureDetector(
+              onTap: onDelete,
+              child: const Padding(
+                padding: EdgeInsets.all(4),
+                child: Icon(Icons.close, size: 14, color: Colors.white24),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Bottom Drawer Tile ──
+class _DrawerTile extends StatelessWidget {
+  final IconData? icon;
+  final Color? iconColor;
+  final String title;
+  final VoidCallback? onTap;
+  final Widget? trailing;
+
+  const _DrawerTile({this.icon, this.iconColor, required this.title, this.onTap, this.trailing});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        child: Row(
+          children: [
+            if (icon != null)
+              Icon(icon, color: iconColor ?? Colors.white54, size: 18),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                title,
+                style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500),
+              ),
+            ),
+            if (trailing != null) trailing!
+            else if (onTap != null) const Icon(Icons.chevron_right, size: 16, color: Colors.white24),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Small icon button for header ──
+class _MiniIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  final String? tooltip;
+
+  const _MiniIconButton({required this.icon, required this.onTap, this.tooltip});
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip ?? '',
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: const Color(0xFF1a1a22),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.white10),
+          ),
+          child: Icon(icon, color: Colors.white60, size: 16),
+        ),
+      ),
+    );
   }
 }

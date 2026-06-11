@@ -33,15 +33,15 @@ class VoiceRecognitionService(
                 override fun onReadyForSpeech(params: Bundle?) {}
                 
                 override fun onBeginningOfSpeech() {
-                    // Cancel the initial "no speech detected" timeout.
-                    // We let the Android SpeechRecognizer's internal silence timeouts handle the stop.
+                    // User started speaking — remove the "no speech" timeout
                     handler.removeCallbacks(stopListeningRunnable)
                 }
 
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() {
-                    isListening = false
+                    // Don't immediately mark as not listening — let the recognizer
+                    // process and deliver results. The results callback handles state.
                 }
 
                 override fun onError(error: Int) {
@@ -116,38 +116,34 @@ class VoiceRecognitionService(
         if (!isListening) {
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3) // Get top 3 results for better accuracy
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5) // More alternatives = better accuracy
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
 
-                // ═══ IMPROVED TIMEOUTS FOR BETTER USER EXPERIENCE ═══
+                // ═══ OPTIMIZED FOR ACCURACY ═══
 
-                // Complete silence: 10 seconds (was 5s - TOO SHORT!)
-                // User can pause to think without being cut off
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 10000L)
+                // Use ONLINE recognition for better accuracy with names/proper nouns
+                // Offline models are smaller and miss many words
+                putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
 
-                // Possibly complete silence: 8 seconds (was 5s)
-                // More patient with natural pauses
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 8000L)
-
-                // Minimum listening duration: 30 seconds (was 15s)
-                // Allow longer, more complex requests
+                // Timeouts — generous to avoid cutting off mid-sentence
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 3000L)
                 putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 30000L)
 
-                // Prefer on-device recognition when available (faster, more private)
-                putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                // Use device's default language (supports bilingual like Hindi-English)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN") // English (India) — better for Indian names
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-IN")
 
-                // Get confidence scores to filter out uncertain results
+                // Get confidence scores
                 putExtra(RecognizerIntent.EXTRA_CONFIDENCE_SCORES, true)
             }
             try {
                 speechRecognizer?.startListening(intent)
                 isListening = true
 
-                // Auto stop after 20 seconds if absolutely no speech detected
-                // (was 8s - TOO IMPATIENT!)
-                // This only triggers if user says NOTHING at all
+                // Safety timeout: 30 seconds if absolutely no speech
                 handler.removeCallbacks(stopListeningRunnable)
-                handler.postDelayed(stopListeningRunnable, 20000)
+                handler.postDelayed(stopListeningRunnable, 30000)
             } catch (e: Exception) {
                 onError("Failed to start listening: ${e.message}")
             }

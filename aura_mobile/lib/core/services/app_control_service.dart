@@ -49,14 +49,90 @@ class AppControlService {
   Future<List<Contact>> resolveContacts(String name) async {
     if (await Permission.contacts.request().isGranted) {
       final contacts = await FlutterContacts.getContacts(withProperties: true);
-      final query = name.toLowerCase();
-      // Exact or fuzzy match
-      return contacts.where((c) {
-         final cName = c.displayName.toLowerCase();
-         return cName.contains(query);
+      final query = name.toLowerCase().trim();
+
+      if (query.isEmpty) return [];
+
+      // 1. Exact match (highest priority)
+      final exactMatches = contacts.where((c) {
+        final cName = c.displayName.toLowerCase();
+        return cName == query || cName.split(' ').any((part) => part == query);
       }).toList();
+      if (exactMatches.isNotEmpty) return exactMatches;
+
+      // 2. Contains match
+      final containsMatches = contacts.where((c) {
+        final cName = c.displayName.toLowerCase();
+        return cName.contains(query) || query.contains(cName);
+      }).toList();
+      if (containsMatches.isNotEmpty) return containsMatches;
+
+      // 3. Fuzzy match — handles speech recognition errors like
+      // "mitun" vs "mithun", "nikki" vs "niki", "ghani" vs "gani"
+      final fuzzyMatches = <_ScoredContact>[];
+      for (final contact in contacts) {
+        final cName = contact.displayName.toLowerCase();
+        final parts = cName.split(' ');
+
+        // Check each name part for fuzzy similarity
+        for (final part in parts) {
+          final distance = _levenshteinDistance(query, part);
+          final maxLen = query.length > part.length ? query.length : part.length;
+
+          // Allow up to 2 character differences for short names, 3 for longer ones
+          final threshold = maxLen <= 4 ? 1 : (maxLen <= 6 ? 2 : 3);
+
+          if (distance <= threshold) {
+            fuzzyMatches.add(_ScoredContact(contact, distance));
+            break; // Don't add same contact twice
+          }
+        }
+
+        // Also check phonetic similarity (first 3-4 chars match)
+        if (fuzzyMatches.every((m) => m.contact != contact)) {
+          for (final part in parts) {
+            if (part.length >= 3 && query.length >= 3) {
+              // First 3 chars match — likely the same name
+              if (part.substring(0, 3) == query.substring(0, 3)) {
+                fuzzyMatches.add(_ScoredContact(contact, 2));
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      // Sort by similarity (lower distance = better match)
+      fuzzyMatches.sort((a, b) => a.distance.compareTo(b.distance));
+      return fuzzyMatches.take(5).map((m) => m.contact).toList();
     }
     return [];
+  }
+
+  /// Levenshtein distance — counts minimum edits to transform one string into another
+  int _levenshteinDistance(String s, String t) {
+    if (s == t) return 0;
+    if (s.isEmpty) return t.length;
+    if (t.isEmpty) return s.length;
+
+    List<int> prev = List.generate(t.length + 1, (i) => i);
+    List<int> curr = List.filled(t.length + 1, 0);
+
+    for (int i = 1; i <= s.length; i++) {
+      curr[0] = i;
+      for (int j = 1; j <= t.length; j++) {
+        final cost = s[i - 1] == t[j - 1] ? 0 : 1;
+        curr[j] = [
+          curr[j - 1] + 1,      // insertion
+          prev[j] + 1,          // deletion
+          prev[j - 1] + cost,   // substitution
+        ].reduce((a, b) => a < b ? a : b);
+      }
+      final temp = prev;
+      prev = curr;
+      curr = temp;
+    }
+    return prev[t.length];
   }
 
   Future<void> dialContact(String nameOrNumber) async {
@@ -192,3 +268,9 @@ class AppControlService {
   }
 }
 
+/// Helper class for sorting contacts by fuzzy match score
+class _ScoredContact {
+  final Contact contact;
+  final int distance;
+  _ScoredContact(this.contact, this.distance);
+}

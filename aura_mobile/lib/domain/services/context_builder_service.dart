@@ -19,6 +19,12 @@ class ContextBuilderService {
   /// Current model tier — set by the orchestrator so prompts adapt to model size.
   ModelTier modelTier = ModelTier.large;
 
+  // ── Memory cache to avoid redundant DB+embedding queries on rapid messages ──
+  String? _lastMemoryQuery;
+  List<String> _cachedMemories = [];
+  DateTime _memoryCacheTime = DateTime(2000);
+  static const Duration _memoryCacheTTL = Duration(seconds: 30);
+
   ContextBuilderService(this._memoryService, this._documentService);
 
   Future<String> buildPrompt({
@@ -33,21 +39,23 @@ class ContextBuilderService {
     if (modelTier.isSmall) {
       final basePrompt = personaSystemPrompt ??
           "You are AURA, a helpful AI assistant.";
-      buffer.writeln("$basePrompt If unsure, say you don't know. Only use the context provided below.");
+      buffer.writeln("$basePrompt Answer naturally. If context is provided below, use it. If not, just respond helpfully. STOP after answering. Do NOT continue with unrelated topics.");
     } else {
       final basePrompt = personaSystemPrompt ??
           "You are AURA, a privacy-first offline AI assistant. Answer concisely and helpfully.";
       buffer.writeln("$basePrompt "
           "IMPORTANT RULES: "
-          "1. Only state facts you are confident about. If you are unsure or don't know, say so clearly — never make up information. "
-          "2. When context (memories, documents, or search results) is provided below, base your answer strictly on that context. Do not invent details beyond what is given. "
-          "3. Distinguish between what you know vs. what you are reasoning about. Use phrases like 'Based on the provided context...' or 'I think...' when appropriate. "
-          "4. When writing HTML, always include CSS within <style> tags and JavaScript within <script> tags in a single ```html block. Do NOT create separate blocks for css or javascript.");
+          "1. Answer ONLY the user's question. Once done, STOP. Never continue with unrelated topics or fake follow-up questions. "
+          "2. For casual messages (greetings, small talk), respond naturally and briefly. "
+          "3. Only state facts you are confident about. If unsure, say so — never make up information. "
+          "4. When context (memories, documents, or search results) is provided below, use it strictly. "
+          "5. For code: write the code, add a brief explanation, then STOP. Do not generate additional unrelated content. "
+          "6. Never generate text like 'Human:', 'User:', or fake conversation turns.");
     }
 
     // 2. Memory Context — fewer for small models to save context window
     if (includeMemories) {
-      final memories = await _memoryService.retrieveRelevantMemories(userMessage);
+      final memories = await _getMemoriesCached(userMessage);
       if (memories.isNotEmpty) {
         final limit = modelTier.isSmall ? 2 : 3;
         final topMemories = memories.take(limit).toList();
@@ -143,5 +151,20 @@ class ContextBuilderService {
     }
     buffer.writeln("\nANSWER:");
     return buffer.toString();
+  }
+
+  /// Returns cached memories if the same query was asked within the TTL window.
+  /// Avoids redundant embedding generation + DB scan on rapid follow-up messages.
+  Future<List<String>> _getMemoriesCached(String query) async {
+    final now = DateTime.now();
+    if (_lastMemoryQuery == query && now.difference(_memoryCacheTime) < _memoryCacheTTL) {
+      return _cachedMemories;
+    }
+
+    final memories = await _memoryService.retrieveRelevantMemories(query);
+    _lastMemoryQuery = query;
+    _cachedMemories = memories;
+    _memoryCacheTime = now;
+    return memories;
   }
 }

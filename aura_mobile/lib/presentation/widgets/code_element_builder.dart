@@ -10,24 +10,6 @@ import 'package:aura_mobile/domain/services/code_execution_service.dart';
 final CodeExecutionService _executionService = CodeExecutionService();
 
 // ── Language helpers ──────────────────────────────────────────────────────────
-IconData _langIcon(String lang) {
-  switch (lang) {
-    case 'python': return Icons.auto_awesome;
-    case 'javascript': case 'js': return Icons.javascript;
-    case 'html': return Icons.language;
-    case 'dart': return Icons.flash_on;
-    case 'java': return Icons.coffee;
-    case 'kotlin': return Icons.android;
-    case 'cpp': case 'c': return Icons.memory;
-    case 'bash': case 'sh': return Icons.terminal;
-    case 'rust': return Icons.shield;
-    case 'go': return Icons.speed;
-    case 'swift': return Icons.apple;
-    case 'typescript': case 'ts': return Icons.code;
-    default: return Icons.code;
-  }
-}
-
 Color _langColor(String lang) {
   switch (lang) {
     case 'python': return const Color(0xFF4B8BBE);
@@ -71,8 +53,6 @@ class CodeElementBuilder extends MarkdownElementBuilder {
       'md', 'markdown', 'sql', 'plaintext', ''
     ];
 
-    // Force full screen width — SizedBox breaks out of MarkdownBody's
-    // internal layout constraints which would otherwise squish the widget
     final screenWidth = MediaQuery.of(context).size.width - 8;
     final widget = !nonExecutable.contains(language)
         ? _CodeBlockWithPreview(code: textContent, language: language)
@@ -98,48 +78,24 @@ class _SimpleCodeBlockState extends State<_SimpleCodeBlock> {
   @override
   Widget build(BuildContext context) {
     final langColor = _langColor(widget.language);
-    return _buildCard(
+    return _CodeCard(
+      language: widget.language,
       langColor: langColor,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Header — same as email draft header
-          _buildCardHeader(widget.language, langColor),
-          // Divider
-          Container(height: 1, color: langColor.withOpacity(0.18)),
-          // Code body
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Text(
-                widget.code,
-                style: GoogleFonts.firaCode(
-                    fontSize: 13, height: 1.6, color: const Color(0xFFCDD6F4)),
-              ),
-            ),
-          ),
-          // Action buttons at bottom — like email card
-          _buildBottomActions(
-            left: _ActionBtn(
-              icon: _copied ? Icons.check_rounded : Icons.copy_rounded,
-              label: _copied ? 'Copied!' : 'Copy Code',
-              color: Colors.white70,
-              outlined: true,
-              onTap: () async {
-                await Clipboard.setData(ClipboardData(text: widget.code));
-                if (mounted) {
-                  setState(() => _copied = true);
-                  Future.delayed(const Duration(seconds: 2), () {
-                    if (mounted) setState(() => _copied = false);
-                  });
-                }
-              },
-            ),
-          ),
-        ],
-      ),
+      actions: [
+        _CopyButton(
+          copied: _copied,
+          onTap: () async {
+            await Clipboard.setData(ClipboardData(text: widget.code));
+            if (mounted) {
+              setState(() => _copied = true);
+              Future.delayed(const Duration(seconds: 2), () {
+                if (mounted) setState(() => _copied = false);
+              });
+            }
+          },
+        ),
+      ],
+      child: _CodeBody(code: widget.code),
     );
   }
 }
@@ -155,7 +111,7 @@ class _CodeBlockWithPreview extends StatefulWidget {
 }
 
 class _CodeBlockWithPreviewState extends State<_CodeBlockWithPreview> {
-  int _tabIndex = 0; // 0 = Code, 1 = Preview/Run
+  int _tabIndex = 0;
   bool _isExecuting = false;
   String? _executionOutput;
   bool _hasError = false;
@@ -179,144 +135,261 @@ class _CodeBlockWithPreviewState extends State<_CodeBlockWithPreview> {
     final isHtml = widget.language == 'html';
     final langColor = _langColor(widget.language);
 
-    return _buildCard(
+    return _CodeCard(
+      language: widget.language,
       langColor: langColor,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Header
-          _buildCardHeader(widget.language, langColor),
-          // Divider
-          Container(height: 1, color: langColor.withOpacity(0.18)),
-          // Body — code or preview
-          AnimatedSize(
-            duration: const Duration(milliseconds: 240),
-            curve: Curves.easeInOut,
-            child: _tabIndex == 0
-                ? _buildCodeView()
-                : isHtml
-                    ? _buildHtmlPreview()
-                    : _buildRunView(langColor),
-          ),
-          // Divider before buttons
-          Container(height: 1, color: langColor.withOpacity(0.12)),
-          // Bottom action buttons — exactly like email card
-          _buildBottomActions(
-            left: _ActionBtn(
-              icon: _copied ? Icons.check_rounded : Icons.copy_rounded,
-              label: _copied ? 'Copied!' : 'Copy Code',
-              color: Colors.white70,
-              outlined: true,
-              onTap: () async {
-                await Clipboard.setData(ClipboardData(text: widget.code));
-                if (mounted) {
-                  setState(() => _copied = true);
-                  Future.delayed(const Duration(seconds: 2), () {
-                    if (mounted) setState(() => _copied = false);
-                  });
-                }
-              },
-            ),
-            right: _ActionBtn(
-              icon: _tabIndex == 0
-                  ? (isHtml ? Icons.preview : Icons.play_arrow_rounded)
-                  : Icons.data_object,
-              label: _tabIndex == 0
-                  ? (isHtml ? 'Preview' : (_isExecuting ? 'Running...' : 'Run Code'))
-                  : 'View Code',
-              color: Colors.black,
-              accentColor: langColor,
-              outlined: false,
-              onTap: () {
-                if (_tabIndex == 0) {
-                  setState(() => _tabIndex = 1);
-                  if (!isHtml && _executionOutput == null) _runCode();
-                } else {
-                  setState(() => _tabIndex = 0);
-                }
-              },
-            ),
-          ),
-        ],
+      actions: [
+        _CopyButton(
+          copied: _copied,
+          onTap: () async {
+            await Clipboard.setData(ClipboardData(text: widget.code));
+            if (mounted) {
+              setState(() => _copied = true);
+              Future.delayed(const Duration(seconds: 2), () {
+                if (mounted) setState(() => _copied = false);
+              });
+            }
+          },
+        ),
+        const SizedBox(width: 8),
+        _RunButton(
+          isRunning: _isExecuting,
+          isShowingResult: _tabIndex == 1,
+          isHtml: isHtml,
+          langColor: langColor,
+          onTap: () {
+            if (_tabIndex == 0) {
+              setState(() => _tabIndex = 1);
+              if (!isHtml && _executionOutput == null) _runCode();
+            } else {
+              setState(() => _tabIndex = 0);
+            }
+          },
+        ),
+      ],
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 200),
+        child: _tabIndex == 0
+            ? _CodeBody(key: const ValueKey('code'), code: widget.code)
+            : isHtml
+                ? _HtmlPreview(key: const ValueKey('html'), code: widget.code)
+                : _RunOutput(
+                    key: const ValueKey('run'),
+                    isExecuting: _isExecuting,
+                    output: _executionOutput,
+                    hasError: _hasError,
+                    langColor: langColor,
+                  ),
       ),
     );
   }
+}
 
-  Widget _buildCodeView() {
+// ═══════════════════════════════════════════════════════════════════════════════
+// PREMIUM UI COMPONENTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// The outer card container — premium dark glass effect
+class _CodeCard extends StatelessWidget {
+  final String language;
+  final Color langColor;
+  final List<Widget> actions;
+  final Widget child;
+
+  const _CodeCard({
+    required this.language,
+    required this.langColor,
+    required this.actions,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Text(
-          widget.code,
-          style: GoogleFonts.firaCode(
-              fontSize: 13, height: 1.6, color: const Color(0xFFCDD6F4)),
+      margin: const EdgeInsets.symmetric(vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0d0d14),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+        boxShadow: [
+          BoxShadow(
+            color: langColor.withOpacity(0.06),
+            blurRadius: 20,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Header
+            _CardHeader(language: language, langColor: langColor, actions: actions),
+            // Code content
+            child,
+          ],
         ),
       ),
     );
   }
+}
 
-  Widget _buildHtmlPreview() {
+/// Sleek header bar with language label and action buttons
+class _CardHeader extends StatelessWidget {
+  final String language;
+  final Color langColor;
+  final List<Widget> actions;
+
+  const _CardHeader({
+    required this.language,
+    required this.langColor,
+    required this.actions,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.03),
+        border: Border(bottom: BorderSide(color: Colors.white.withOpacity(0.06))),
+      ),
+      child: Row(
+        children: [
+          // Language indicator dot
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: langColor,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(color: langColor.withOpacity(0.5), blurRadius: 4),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            language == 'plaintext' ? 'Code' : language.toUpperCase(),
+            style: GoogleFonts.outfit(
+              color: Colors.white54,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.8,
+            ),
+          ),
+          const Spacer(),
+          ...actions,
+        ],
+      ),
+    );
+  }
+}
+
+/// Code text body with horizontal scroll
+class _CodeBody extends StatelessWidget {
+  final String code;
+
+  const _CodeBody({super.key, required this.code});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Text(
+          code,
+          style: GoogleFonts.jetBrainsMono(
+            fontSize: 12.5,
+            height: 1.7,
+            color: const Color(0xFFE4E4E8),
+            letterSpacing: 0.2,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// HTML live preview
+class _HtmlPreview extends StatelessWidget {
+  final String code;
+
+  const _HtmlPreview({super.key, required this.code});
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
       constraints: const BoxConstraints(minHeight: 120),
-      color: const Color(0xFF080810),
       padding: const EdgeInsets.all(14),
       child: HtmlWidget(
-        widget.code,
+        code,
         textStyle: const TextStyle(color: Colors.white),
       ),
     );
   }
+}
 
-  Widget _buildRunView(Color langColor) {
+/// Code execution output panel
+class _RunOutput extends StatelessWidget {
+  final bool isExecuting;
+  final String? output;
+  final bool hasError;
+  final Color langColor;
+
+  const _RunOutput({
+    super.key,
+    required this.isExecuting,
+    required this.output,
+    required this.hasError,
+    required this.langColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.all(14),
-        constraints: const BoxConstraints(minHeight: 80),
+        constraints: const BoxConstraints(minHeight: 60),
         decoration: BoxDecoration(
           color: const Color(0xFF080810),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
-            color: _executionOutput == null
-                ? const Color(0x1AFFFFFF)
-                : (_hasError
-                    ? const Color(0x66FF0000)
-                    : const Color(0x4D00FF00)),
+            color: output == null
+                ? Colors.white.withOpacity(0.06)
+                : (hasError ? Colors.red.withOpacity(0.3) : Colors.green.withOpacity(0.2)),
           ),
         ),
-        child: _isExecuting
+        child: isExecuting
             ? Row(children: [
                 SizedBox(
                   width: 14, height: 14,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: langColor),
+                  child: CircularProgressIndicator(strokeWidth: 2, color: langColor),
                 ),
                 const SizedBox(width: 10),
-                Text('Executing...',
-                    style: GoogleFonts.firaCode(
-                        fontSize: 12, color: const Color(0x80FFFFFF))),
+                Text('Running...',
+                    style: GoogleFonts.jetBrainsMono(fontSize: 12, color: Colors.white38)),
               ])
-            : _executionOutput == null
+            : output == null
                 ? Row(children: [
-                    const Icon(Icons.chevron_right,
-                        color: Color(0x44FFFFFF), size: 16),
+                    Icon(Icons.chevron_right_rounded, color: Colors.white24, size: 16),
                     const SizedBox(width: 6),
-                    Text('Click "Run Code" to execute',
-                        style: GoogleFonts.firaCode(
-                            fontSize: 12, color: const Color(0x44FFFFFF))),
+                    Text('Tap Run to execute',
+                        style: GoogleFonts.jetBrainsMono(fontSize: 12, color: Colors.white24)),
                   ])
                 : SelectableText(
-                    _executionOutput!,
-                    style: GoogleFonts.firaCode(
-                      fontSize: 13, height: 1.65,
-                      color: _hasError
-                          ? const Color(0xFFFF7B7B)
-                          : const Color(0xFF7CFC00),
+                    output!,
+                    style: GoogleFonts.jetBrainsMono(
+                      fontSize: 12.5,
+                      height: 1.6,
+                      color: hasError ? const Color(0xFFFF7B7B) : const Color(0xFF7CFC00),
                     ),
                   ),
       ),
@@ -324,104 +397,99 @@ class _CodeBlockWithPreviewState extends State<_CodeBlockWithPreview> {
   }
 }
 
-// ── Shared card shell — mirrors email draft card exactly ──────────────────────
-Widget _buildCard({required Color langColor, required Widget child}) {
-  return Container(
-    margin: const EdgeInsets.symmetric(vertical: 10),
-    decoration: BoxDecoration(
-      gradient: const LinearGradient(
-        colors: [Color(0xFF1a1a22), Color(0xFF141418)],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      ),
-      borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: langColor.withOpacity(0.4), width: 1.2),
-    ),
-    child: child,
-  );
-}
+// ── Action Buttons ────────────────────────────────────────────────────────────
 
-// ── Card header — mirrors "Email Draft" header exactly ────────────────────────
-Widget _buildCardHeader(String language, Color langColor) {
-  return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-    decoration: BoxDecoration(
-      color: langColor.withOpacity(0.12),
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-    ),
-    child: Row(
-      children: [
-        Icon(_langIcon(language), color: langColor, size: 18),
-        const SizedBox(width: 8),
-        Text(
-          language == 'plaintext' ? 'Code' : language.toUpperCase(),
-          style: GoogleFonts.outfit(
-            color: langColor,
-            fontWeight: FontWeight.bold,
-            fontSize: 13,
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-// ── Bottom action row — mirrors "Done Editing / Send Email" ───────────────────
-class _ActionBtn {
-  final IconData icon;
-  final String label;
-  final Color color;
-  final Color? accentColor;
-  final bool outlined;
+/// Minimal copy button
+class _CopyButton extends StatelessWidget {
+  final bool copied;
   final VoidCallback onTap;
-  const _ActionBtn({
-    required this.icon, required this.label, required this.color,
-    required this.outlined, required this.onTap, this.accentColor,
-  });
-}
 
-Widget _buildBottomActions({required _ActionBtn left, _ActionBtn? right}) {
-  return Padding(
-    padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-    child: Row(
-      children: [
-        Expanded(
-          child: _buildBtn(left),
+  const _CopyButton({required this.copied, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: copied ? Colors.green.withOpacity(0.15) : Colors.white.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: copied ? Colors.green.withOpacity(0.3) : Colors.white.withOpacity(0.1)),
         ),
-        if (right != null) ...[
-          const SizedBox(width: 10),
-          Expanded(child: _buildBtn(right)),
-        ],
-      ],
-    ),
-  );
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              copied ? Icons.check_rounded : Icons.content_copy_rounded,
+              size: 13,
+              color: copied ? Colors.green : Colors.white54,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              copied ? 'Copied' : 'Copy',
+              style: GoogleFonts.outfit(
+                fontSize: 11,
+                color: copied ? Colors.green : Colors.white54,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-Widget _buildBtn(_ActionBtn btn) {
-  if (btn.outlined) {
-    return OutlinedButton.icon(
-      icon: Icon(btn.icon, size: 16, color: btn.color),
-      label: Text(btn.label,
-          style: GoogleFonts.outfit(color: btn.color, fontSize: 13)),
-      style: OutlinedButton.styleFrom(
-        side: BorderSide(color: Colors.white.withOpacity(0.2)),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        padding: const EdgeInsets.symmetric(vertical: 10),
+/// Run / Preview button
+class _RunButton extends StatelessWidget {
+  final bool isRunning;
+  final bool isShowingResult;
+  final bool isHtml;
+  final Color langColor;
+  final VoidCallback onTap;
+
+  const _RunButton({
+    required this.isRunning,
+    required this.isShowingResult,
+    required this.isHtml,
+    required this.langColor,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final label = isShowingResult ? 'Code' : (isHtml ? 'Preview' : (isRunning ? 'Running' : 'Run'));
+    final icon = isShowingResult
+        ? Icons.code_rounded
+        : (isHtml ? Icons.visibility_rounded : Icons.play_arrow_rounded);
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: langColor.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: langColor.withOpacity(0.3)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: langColor),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: GoogleFonts.outfit(
+                fontSize: 11,
+                color: langColor,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
       ),
-      onPressed: btn.onTap,
-    );
-  } else {
-    return ElevatedButton.icon(
-      icon: Icon(btn.icon, size: 16, color: btn.color),
-      label: Text(btn.label,
-          style: GoogleFonts.outfit(
-              color: btn.color, fontWeight: FontWeight.bold, fontSize: 13)),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: btn.accentColor ?? const Color(0xFFc69c3a),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        padding: const EdgeInsets.symmetric(vertical: 10),
-      ),
-      onPressed: btn.onTap,
     );
   }
 }

@@ -18,11 +18,11 @@ class GreetingWidget extends ConsumerWidget {
     }
   }
 
-  String _getEmoji() {
+  IconData _getTimeIcon() {
     final hour = DateTime.now().hour;
-    if (hour < 6) return '🌙';
-    if (hour < 18) return '☀️';
-    return '🌙';
+    if (hour < 6) return Icons.nightlight_round;
+    if (hour < 18) return Icons.wb_sunny_rounded;
+    return Icons.nightlight_round;
   }
 
   @override
@@ -33,32 +33,29 @@ class GreetingWidget extends ConsumerWidget {
       data: (name) => Column(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          RichText(
-            textAlign: TextAlign.center,
-            text: TextSpan(
-              children: [
-                TextSpan(
-                  text: "${_getGreeting()}, ",
-                  style: GoogleFonts.outfit(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w300,
-                    color: Colors.white,
-                  ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                "${_getGreeting()}, ",
+                style: GoogleFonts.outfit(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w300,
+                  color: Colors.white,
                 ),
-                TextSpan(
-                  text: "$name! ",
-                  style: GoogleFonts.outfit(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
+              ),
+              Text(
+                "$name",
+                style: GoogleFonts.outfit(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
                 ),
-                 TextSpan(
-                  text: _getEmoji(),
-                  style: const TextStyle(fontSize: 20),
-                ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 8),
+              Icon(_getTimeIcon(), color: const Color(0xFFc69c3a), size: 20),
+            ],
           ),
           const SizedBox(height: 8),
           Consumer(
@@ -79,7 +76,7 @@ class GreetingWidget extends ConsumerWidget {
         ],
       ),
       loading: () => const SizedBox.shrink(),
-      error: (_, __) => const SizedBox.shrink(),
+      error: (_, err) => const SizedBox.shrink(),
     );
   }
 }

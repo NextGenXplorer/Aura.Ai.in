@@ -1,115 +1,155 @@
 import 'package:dio/dio.dart';
 import 'package:logger/logger.dart';
 
+/// Executes code via the Wandbox API (https://wandbox.org) — free, no auth.
+///
+/// Supports 30+ languages: Python, JavaScript, TypeScript, C, C++, C#, Java,
+/// Go, Rust, Ruby, PHP, Swift, Bash, Lua, Perl, R, Haskell, Scala, and more.
+///
+/// Note: The previous Piston public API (emkc.org) became whitelist-only as
+/// of Feb 2026, so Wandbox is now the primary execution engine.
 class CodeExecutionService {
-  final Dio _dio = Dio(BaseOptions(
-    baseUrl: 'https://emkc.org/api/v2/piston',
-    connectTimeout: const Duration(seconds: 10),
-    receiveTimeout: const Duration(seconds: 15),
-  ));
   final Logger _logger = Logger();
 
-  // Cache fetched runtimes
-  List<Map<String, dynamic>>? _runtimes;
+  final Dio _dio = Dio(BaseOptions(
+    baseUrl: 'https://wandbox.org/api',
+    connectTimeout: const Duration(seconds: 12),
+    receiveTimeout: const Duration(seconds: 25),
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'User-Agent': 'AuraMobile/1.0',
+    },
+    validateStatus: (status) => status != null && status < 500,
+  ));
 
-  /// Fetches available languages from Piston
-  Future<List<Map<String, dynamic>>> getRuntimes() async {
-    if (_runtimes != null) return _runtimes!;
-    try {
-      final response = await _dio.get('/runtimes');
-      if (response.statusCode == 200) {
-        _runtimes = List<Map<String, dynamic>>.from(response.data);
-        return _runtimes!;
-      }
-    } catch (e) {
-      _logger.e("Failed to fetch Piston runtimes: $e");
-    }
-    return [];
+  /// Maps common language names/aliases to Wandbox compiler identifiers.
+  /// These are stable compiler names verified against the Wandbox compiler list.
+  static const Map<String, String> _compilerMap = {
+    // Python
+    'python': 'cpython-3.12.7',
+    'python3': 'cpython-3.12.7',
+    'py': 'cpython-3.12.7',
+    'python2': 'cpython-2.7.18',
+    'py2': 'cpython-2.7.18',
+    // JavaScript / TypeScript
+    'javascript': 'nodejs-20.17.0',
+    'js': 'nodejs-20.17.0',
+    'node': 'nodejs-20.17.0',
+    'typescript': 'typescript-5.6.2',
+    'ts': 'typescript-5.6.2',
+    // C / C++
+    'c': 'gcc-13.2.0-c',
+    'cpp': 'gcc-13.2.0',
+    'c++': 'gcc-13.2.0',
+    // C#
+    'csharp': 'dotnetcore-8.0.402',
+    'c#': 'dotnetcore-8.0.402',
+    'cs': 'dotnetcore-8.0.402',
+    // Other languages
+    'rust': 'rust-1.82.0',
+    'rs': 'rust-1.82.0',
+    'go': 'go-1.23.2',
+    'golang': 'go-1.23.2',
+    'ruby': 'ruby-3.4.9',
+    'rb': 'ruby-3.4.9',
+    'php': 'php-8.3.12',
+    'bash': 'bash',
+    'sh': 'bash',
+    'shell': 'bash',
+    'lua': 'lua-5.4.7',
+    'perl': 'perl-5.40.0',
+    'pl': 'perl-5.40.0',
+    'r': 'r-4.4.1',
+    'java': 'openjdk-jdk-22+36',
+    'haskell': 'ghc-9.10.1',
+    'hs': 'ghc-9.10.1',
+    'scala': 'scala-3.5.1',
+    'swift': 'swift-6.0.1',
+    'pascal': 'fpc-3.2.2',
+    'lisp': 'sbcl-2.4.9',
+    'sql': 'sqlite-3.46.1',
+    'sqlite': 'sqlite-3.46.1',
+  };
+
+  /// Returns true if a language can be executed online.
+  bool isSupported(String language) {
+    return _compilerMap.containsKey(language.toLowerCase().trim());
   }
 
-  /// Finds the correct Piston language configuration based on common markdown names
-  Future<Map<String, dynamic>?> _resolveLanguage(String languageKey) async {
-    final runtimes = await getRuntimes();
-    final lowerKey = languageKey.toLowerCase().trim();
-
-    for (var runtime in runtimes) {
-      final lang = runtime['language'] as String;
-      final aliases = List<String>.from(runtime['aliases'] ?? []);
-      if (lang == lowerKey || aliases.contains(lowerKey)) {
-        return runtime;
-      }
-    }
-    
-    // Quick fallback aliases
-    if (lowerKey == 'js' || lowerKey == 'javascript' || lowerKey == 'node') return runtimes.firstWhere((r) => r['language'] == 'javascript', orElse: () => <String, dynamic>{});
-    if (lowerKey == 'ts' || lowerKey == 'typescript') return runtimes.firstWhere((r) => r['language'] == 'typescript', orElse: () => <String, dynamic>{});
-    if (lowerKey == 'py' || lowerKey == 'python') return runtimes.firstWhere((r) => r['language'] == 'python', orElse: () => <String, dynamic>{});
-    if (lowerKey == 'cpp' || lowerKey == 'c++') return runtimes.firstWhere((r) => r['language'] == 'c++', orElse: () => <String, dynamic>{});
-
-    return null;
-  }
-
-  /// Executes code using the Piston v2 API
+  /// Executes code and returns the output (or error message).
   Future<String> executeCode(String code, String language) async {
-    try {
-      final runtime = await _resolveLanguage(language);
-      if (runtime == null || runtime.isEmpty) {
-        return "Error: Language '$language' is not supported by the execution engine.";
-      }
+    final lang = language.toLowerCase().trim();
+    final compiler = _compilerMap[lang];
 
+    if (compiler == null) {
+      return "Language '$language' isn't supported for online execution.\n\n"
+          "Supported: Python, JavaScript, TypeScript, C, C++, C#, Java, "
+          "Go, Rust, Ruby, PHP, Swift, Bash, Lua, Perl, R, Haskell, Scala, and more.";
+    }
+
+    try {
       final payload = {
-        "language": runtime['language'],
-        "version": runtime['version'],
-        "files": [
-          {
-            "content": code
-          }
-        ],
-        "stdin": "",
-        "args": [],
-        "compile_timeout": 10000,
-        "run_timeout": 5000,
-        "compile_memory_limit": -1,
-        "run_memory_limit": -1
+        'code': code,
+        'compiler': compiler,
+        'stdin': '',
+        // Compiler options for languages that need them
+        if (lang == 'c' || lang == 'cpp' || lang == 'c++')
+          'options': 'warning,gnu++17',
       };
 
-      final response = await _dio.post('/execute', data: payload);
+      final response = await _dio.post('/compile.json', data: payload);
 
       if (response.statusCode == 200) {
-        final data = response.data;
-        final runResult = data['run'];
-        final compileResult = data['compile'];
-
-        StringBuffer output = StringBuffer();
-        
-        if (compileResult != null && compileResult['code'] != 0) {
-          output.writeln("--- Compilation Error ---");
-          output.writeln(compileResult['output'] ?? "");
-        } else if (runResult != null) {
-          final stdout = runResult['stdout'] ?? "";
-          final stderr = runResult['stderr'] ?? "";
-          output.write(stdout);
-          if (stderr.toString().isNotEmpty) {
-             output.writeln("\n--- Error Output ---");
-             output.writeln(stderr);
-          }
-        } else {
-           output.writeln("Unknown execution error. Data: $data");
-        }
-        
-        return output.toString().trim();
+        return _parseWandboxResponse(response.data);
+      } else if (response.statusCode == 400) {
+        return "Compilation failed — please check your code syntax.";
       } else {
-        return "Engine returned status code: ${response.statusCode}\n${response.data}";
+        throw Exception("HTTP ${response.statusCode}");
       }
-
     } on DioException catch (e) {
-      if (e.type == DioExceptionType.connectionTimeout || e.type == DioExceptionType.receiveTimeout) {
-        return "Execution timed out. The server took too long to respond.";
+      if (e.type == DioExceptionType.connectionTimeout ||
+          e.type == DioExceptionType.receiveTimeout) {
+        return "Execution timed out. The program took too long or the server is busy.";
       }
-      return "Network error: ${e.message}";
+      _logger.w("Wandbox execution failed: ${e.message}");
+      return "Couldn't reach the execution server.\nTry switching between WiFi and mobile data, then try again.";
     } catch (e) {
-      _logger.e("Error executing code: $e");
-      return "Internal error occurred while trying to run the code: $e";
+      _logger.e("Code execution error: $e");
+      return "Something went wrong while running the code. Please try again.";
     }
+  }
+
+  /// Parses Wandbox's JSON response into a clean output string.
+  String _parseWandboxResponse(dynamic data) {
+    if (data is! Map) return "Unexpected response from execution server.";
+
+    final output = StringBuffer();
+
+    final compilerError = data['compiler_error']?.toString() ?? '';
+    final programOutput = data['program_output']?.toString() ?? '';
+    final programError = data['program_error']?.toString() ?? '';
+
+    // Compilation errors take priority
+    if (compilerError.trim().isNotEmpty) {
+      output.writeln("--- Compilation Error ---");
+      output.write(compilerError.trim());
+      return output.toString().trim();
+    }
+
+    // Program output
+    if (programOutput.trim().isNotEmpty) {
+      output.write(programOutput.trimRight());
+    }
+
+    // Runtime errors
+    if (programError.trim().isNotEmpty) {
+      if (output.isNotEmpty) output.writeln();
+      output.writeln("--- Runtime Error ---");
+      output.write(programError.trim());
+    }
+
+    final result = output.toString().trim();
+    return result.isEmpty ? "(Program ran successfully with no output)" : result;
   }
 }

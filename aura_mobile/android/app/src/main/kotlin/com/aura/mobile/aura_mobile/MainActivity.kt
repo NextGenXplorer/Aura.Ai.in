@@ -58,6 +58,17 @@ class MainActivity: FlutterActivity() {
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Re-deliver any pending AI query that arrived while activity was paused
+        val pending = AssistantForegroundService.pendingAiQuery
+        if (pending != null && assistantAiChannel != null) {
+            AssistantForegroundService.pendingAiQuery = null
+            Log.d("AuraMainActivity", "onResume: Delivering pending query: $pending")
+            assistantAiChannel?.invokeMethod("processAIQuery", pending)
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -105,14 +116,33 @@ class MainActivity: FlutterActivity() {
                     AssistantForegroundService.onAiComplete?.invoke()
                     result.success(null)
                 }
+                "getPendingQuery" -> {
+                    // Flutter polls for pending queries — reliable fallback
+                    val query = AssistantForegroundService.pendingAiQuery
+                    if (query != null) {
+                        AssistantForegroundService.pendingAiQuery = null
+                        Log.d("AuraMainActivity", "getPendingQuery: returning '$query'")
+                        result.success(query)
+                    } else {
+                        result.success(null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
 
         // Register as the AI request handler — direct call, no broadcasts
         AssistantForegroundService.aiRequestHandler = { query ->
-            runOnUiThread {
-                assistantAiChannel?.invokeMethod("processAIQuery", query)
+            Log.d("AuraMainActivity", "aiRequestHandler called with: $query")
+            // ALWAYS store as pending so Flutter's polling can pick it up
+            AssistantForegroundService.pendingAiQuery = query
+            // Also try direct method channel (works sometimes)
+            val channel = assistantAiChannel
+            if (channel != null) {
+                runOnUiThread {
+                    Log.d("AuraMainActivity", "Also trying direct invokeMethod")
+                    channel.invokeMethod("processAIQuery", query)
+                }
             }
         }
 

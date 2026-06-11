@@ -14,6 +14,10 @@ class TtsManager(context: Context, private val onInitCompleted: () -> Unit) : Te
     private var lastQueuedId: String? = null
     private var onDoneCallback: (() -> Unit)? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    
+    /** Total character length of text spoken in the current session (since last stop/flush) */
+    var lastSpokenLength: Int = 0
+        private set
 
     init {
         tts = TextToSpeech(context, this)
@@ -50,6 +54,7 @@ class TtsManager(context: Context, private val onInitCompleted: () -> Unit) : Te
     fun speak(text: String, utteranceId: String? = null) {
         if (isInitialized) {
             val id = utteranceId ?: "utt_${utteranceCounter++}"
+            lastSpokenLength = text.length
             tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
         }
     }
@@ -59,6 +64,7 @@ class TtsManager(context: Context, private val onInitCompleted: () -> Unit) : Te
         if (isInitialized) {
             val id = "utt_${utteranceCounter++}"
             lastQueuedId = id
+            lastSpokenLength += text.length
             tts?.speak(text, TextToSpeech.QUEUE_ADD, null, id)
         }
     }
@@ -77,6 +83,7 @@ class TtsManager(context: Context, private val onInitCompleted: () -> Unit) : Te
         tts?.stop()
         onDoneCallback = null
         lastQueuedId = null
+        lastSpokenLength = 0
     }
 
     fun shutdown() {
@@ -84,5 +91,6 @@ class TtsManager(context: Context, private val onInitCompleted: () -> Unit) : Te
         tts?.shutdown()
         onDoneCallback = null
         lastQueuedId = null
+        lastSpokenLength = 0
     }
 }

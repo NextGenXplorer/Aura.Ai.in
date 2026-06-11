@@ -56,7 +56,7 @@ class ProactiveNudgeCard extends StatelessWidget {
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Center(
-                      child: Text(nudge.icon, style: const TextStyle(fontSize: 22)),
+                      child: Icon(nudge.icon, color: color, size: 22),
                     ),
                   ),
                   const SizedBox(width: 12),
