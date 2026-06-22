@@ -31,3 +31,7 @@
 # Ignore missing classes from optional/deferred features (e.g. Play Core and MediaPipe Protos)
 -dontwarn com.google.android.play.core.**
 -dontwarn com.google.mediapipe.proto.**
+
+# Keep org.json classes and methods to prevent R8 from renaming JSONObject methods
+-keep class org.json.** { *; }
+-dontwarn org.json.**
