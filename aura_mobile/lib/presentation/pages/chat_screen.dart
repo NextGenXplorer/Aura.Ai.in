@@ -14,6 +14,8 @@ import 'package:aura_mobile/core/services/proactive_engine.dart';
 import 'package:aura_mobile/presentation/providers/study_provider.dart';
 import 'package:aura_mobile/presentation/pages/study_dashboard_screen.dart';
 import 'package:aura_mobile/presentation/pages/camera_scan_screen.dart';
+import 'package:aura_mobile/presentation/widgets/clay_components.dart';
+import 'package:aura_mobile/presentation/widgets/context_window_indicator.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
@@ -25,8 +27,7 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _showCommandMenu = false;
-  static const MethodChannel _assistantChannel = MethodChannel('com.aura.ai/assistant_ai');
-
+  bool _showTopIndicators = true;
   // Proactive AI state
   ProactiveNudge? _activeNudge;
   bool _nudgeChecked = false;
@@ -37,9 +38,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    _assistantChannel.setMethodCallHandler((call) async {
-      // Native voice-initiated email drafts are handled by the orchestrator
-    });
     _checkProactiveNudge();
   }
 
@@ -119,6 +117,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final chatState = ref.watch(chatProvider);
+    final isKeyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+    final double topSpacerHeight = isKeyboardOpen
+        ? 70.0
+        : (_activeNudge != null ? 240.0 : 150.0);
 
     // Filter out internal system messages
     final visibleMessages = chatState.messages.where((m) {
@@ -128,11 +130,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // Only scroll to bottom when new messages actually arrive (not on every rebuild)
     if (visibleMessages.length != _lastMessageCount) {
       _lastMessageCount = visibleMessages.length;
+      if (visibleMessages.isEmpty) {
+        _showTopIndicators = true;
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0a0a0c),
+      backgroundColor: ClayColors.obsidianBg,
       drawer: const AppDrawer(),
       extendBodyBehindAppBar: true,
       appBar: ChatAppBar(
@@ -145,14 +150,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ),
       body: Column(
         children: [
-          // Proactive AI Nudge Card
-          if (_activeNudge != null)
-            ProactiveNudgeCard(
-              nudge: _activeNudge!,
-              onAction: () => _handleNudgeAction(_activeNudge!),
-              onDismiss: () => setState(() => _activeNudge = null),
-            ),
-
           Expanded(
             child: Stack(
               children: [
@@ -166,25 +163,83 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.center,
                                 children: [
-                                  const SizedBox(height: 60),
-                                  SizedBox(width: double.infinity, child: GreetingWidget()),
+                                  AnimatedContainer(
+                                    duration: const Duration(milliseconds: 300),
+                                    curve: Curves.easeInOut,
+                                    height: topSpacerHeight,
+                                  ),
+                                  const SizedBox(width: double.infinity, child: GreetingWidget()),
                                 ],
                               ),
                             ),
                           ),
                         )
-                      : ListView.builder(
-                          controller: _scrollController,
-                          padding: const EdgeInsets.fromLTRB(0, 100, 0, 80),
-                          itemCount: visibleMessages.length,
-                          itemBuilder: (context, index) {
-                            return _ChatMessageItem(
-                              message: visibleMessages[index],
-                              allMessages: chatState.messages,
-                              onOptionSelected: _sendMessage,
-                            );
+                      : NotificationListener<ScrollNotification>(
+                          onNotification: (notification) {
+                            final offset = notification.metrics.pixels;
+                            final show = offset <= 5.0;
+                            if (show != _showTopIndicators) {
+                              setState(() {
+                                _showTopIndicators = show;
+                              });
+                            }
+                            return false;
                           },
+                          child: ListView.builder(
+                            controller: _scrollController,
+                            padding: EdgeInsets.fromLTRB(
+                              0,
+                              _activeNudge != null ? 230.0 : 140.0,
+                              0,
+                              96,
+                            ),
+                            itemCount: visibleMessages.length,
+                            itemBuilder: (context, index) {
+                              return _ChatMessageItem(
+                                message: visibleMessages[index],
+                                allMessages: chatState.messages,
+                                onOptionSelected: _sendMessage,
+                              );
+                            },
+                          ),
                         ),
+                ),
+
+                // Floating indicators & Proactive Nudge Card
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + kToolbarHeight + 4,
+                  left: 0,
+                  right: 0,
+                  child: AnimatedOpacity(
+                    opacity: _showTopIndicators ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 200),
+                    child: IgnorePointer(
+                      ignoring: !_showTopIndicators,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_activeNudge != null)
+                            ProactiveNudgeCard(
+                              nudge: _activeNudge!,
+                              onAction: () => _handleNudgeAction(_activeNudge!),
+                              onDismiss: () => setState(() => _activeNudge = null),
+                            ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: const ContextWindowIndicator(),
+                                ),
+                                const SizedBox(width: 8),
+                                const ConciseBadge(),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
 
                 // Command Menu (Floating Popup)
@@ -207,17 +262,36 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           // Thinking indicator
           if (chatState.isThinking)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
-              child: Row(
-                children: [
-                  const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFc69c3a)),
+              padding: const EdgeInsets.only(left: 24.0, right: 24.0, bottom: 4.0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: ClayContainer(
+                  borderRadius: 12,
+                  depth: 1.0,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(
+                        width: 10,
+                        height: 10,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.5, 
+                          color: ClayColors.goldAccent,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        "Thinking...", 
+                        style: GoogleFonts.outfit(
+                          color: ClayColors.textMuted, 
+                          fontSize: 11, 
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 12),
-                  Text("Thinking...", style: GoogleFonts.outfit(color: Colors.white54, fontSize: 12)),
-                ],
+                ),
               ),
             ),
 
@@ -252,6 +326,135 @@ class _ChatMessageItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isUser = message['role'] == 'user';
+    final isSystem = message['role'] == 'system';
+    final isAutomation = isSystem && (message['content']?.startsWith('automation_triggered:') ?? false);
+
+    if (isAutomation) {
+      final contentStr = message['content']!.replaceFirst('automation_triggered:', '');
+      final parts = contentStr.split(' - ');
+      final ruleName = parts[0];
+      final logs = parts.length > 1 ? parts.sublist(1).join(' - ') : '';
+      final stepLogs = logs.split('\n');
+
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: Container(
+            constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.85),
+            child: ClayContainer(
+              borderRadius: 18,
+              depth: 4.5,
+              baseColor: const Color(0xFFECE9E3), // Soft Clay Warm Grey
+              highlightColor: const Color(0xFFFFFFFF),
+              shadowColor: const Color(0xFFD6CDBB),
+              padding: const EdgeInsets.all(16),
+              border: Border.all(
+                color: const Color(0xFFC8A96A).withOpacity(0.3),
+                width: 1.2,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Color(0xFFC8A96A),
+                        ),
+                        child: const Icon(
+                          Icons.auto_awesome_rounded,
+                          size: 14,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          ruleName,
+                          style: GoogleFonts.outfit(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                            color: ClayColors.textDark,
+                          ),
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          color: const Color(0xFF34C759).withOpacity(0.12),
+                        ),
+                        child: Text(
+                          'Executed',
+                          style: GoogleFonts.outfit(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: const Color(0xFF248A3D),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 10),
+                    child: Divider(color: Color(0xFFDCD8CF), height: 1),
+                  ),
+                  ...stepLogs.map((log) {
+                    if (log.trim().isEmpty) return const SizedBox.shrink();
+                    final logParts = log.split(': ');
+                    final stepType = logParts[0];
+                    final stepResult = logParts.length > 1 ? logParts.sublist(1).join(': ') : '';
+
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8.0),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(
+                            Icons.check_circle_rounded,
+                            color: Color(0xFF34C759),
+                            size: 16,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: RichText(
+                              text: TextSpan(
+                                children: [
+                                  TextSpan(
+                                    text: '$stepType: ',
+                                    style: GoogleFonts.outfit(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12.5,
+                                      color: ClayColors.textDark,
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: stepResult,
+                                    style: GoogleFonts.outfit(
+                                      fontSize: 12.5,
+                                      color: ClayColors.textMuted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     String displayContent = message['content'] ?? '';
 
     if (isUser) {
@@ -329,29 +532,23 @@ class _CommandMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1a1a20),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFc69c3a), width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.5),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
+    return ClayContainer(
+      borderRadius: 20,
+      depth: 6.0,
+      baseColor: ClayColors.warmGrey,
+      highlightColor: ClayColors.highlight,
+      shadowColor: ClayColors.shadow,
+      border: Border.all(color: ClayColors.goldAccent.withOpacity(0.35), width: 1.2),
+      padding: const EdgeInsets.all(6),
       child: Material(
         color: Colors.transparent,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.public, color: Color(0xFFc69c3a)),
-              title: Text('Web Search', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold)),
-              subtitle: Text('Search the internet for real-time info', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 12)),
+              leading: const Icon(Icons.public_rounded, color: ClayColors.goldAccent),
+              title: Text('Web Search', style: GoogleFonts.outfit(color: ClayColors.textDark, fontWeight: FontWeight.bold)),
+              subtitle: Text('Search the internet for real-time info', style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 12)),
               onTap: onWebSearch,
             ),
           ],

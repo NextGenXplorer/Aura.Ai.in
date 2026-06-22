@@ -13,6 +13,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:aura_mobile/ai/run_anywhere_service.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:aura_mobile/presentation/widgets/voice_assistant_overlay.dart';
+import 'package:aura_mobile/presentation/widgets/clipboard_bubble_overlay.dart';
 import 'package:aura_mobile/core/services/assistant_ai_bridge.dart';
 
 void main() async {
@@ -104,19 +105,19 @@ class AuraApp extends ConsumerWidget {
       title: 'AURA Mobile',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: Colors.transparent, // Changed to transparent for overlay
-        primaryColor: const Color(0xFFc69c3a), // Gold
-        colorScheme: const ColorScheme.dark(
-          primary: Color(0xFFc69c3a),
-          secondary: Color(0xFFe6cf8e),
-          surface: Color(0xFF1a1a20),
-          background: Colors.transparent,
+        brightness: Brightness.light,
+        scaffoldBackgroundColor: const Color(0xFFF7F4EF), // Light warm paper background
+        primaryColor: const Color(0xFFB3862B), // Deep warm gold/amber
+        colorScheme: const ColorScheme.light(
+          primary: Color(0xFFB3862B),
+          secondary: Color(0xFFD1A153),
+          surface: Color(0xFFEFECE6), // Warm grey clay base
+          background: Color(0xFFF7F4EF),
         ),
         textTheme: GoogleFonts.outfitTextTheme(
           Theme.of(context).textTheme.apply(
-            bodyColor: const Color(0xFFEDEDED),
-            displayColor: Colors.white,
+            bodyColor: const Color(0xFF191816), // Deep warm ink text
+            displayColor: const Color(0xFF191816),
           ),
         ),
         useMaterial3: true,
@@ -125,7 +126,9 @@ class AuraApp extends ConsumerWidget {
         return Directionality(
           textDirection: TextDirection.ltr,
           child: VoiceAssistantOverlay(
-            child: child ?? const SizedBox(),
+            child: ClipboardBubbleOverlay(
+              child: child ?? const SizedBox(),
+            ),
           ),
         );
       },

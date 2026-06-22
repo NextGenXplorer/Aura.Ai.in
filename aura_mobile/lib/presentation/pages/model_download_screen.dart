@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:aura_mobile/ai/run_anywhere_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:aura_mobile/core/providers/ai_providers.dart';
+import 'package:aura_mobile/presentation/widgets/clay_components.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -188,19 +189,28 @@ class _ModelDownloadScreenState extends ConsumerState<ModelDownloadScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0a0a0c),
+      backgroundColor: ClayColors.obsidianBg,
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(32.0),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.download_for_offline, size: 80, color: Color(0xFFe6cf8e)),
-              const SizedBox(height: 24),
+              ClayContainer(
+                width: 120,
+                height: 120,
+                borderRadius: 60,
+                depth: 8.0,
+                baseColor: ClayColors.goldAccent.withOpacity(0.12),
+                highlightColor: ClayColors.highlight,
+                shadowColor: ClayColors.shadow,
+                child: const Icon(Icons.download_for_offline_rounded, size: 60, color: ClayColors.goldAccent),
+              ),
+              const SizedBox(height: 32),
               Text(
                 'Setup AI Brain',
-                style: GoogleFonts.inter(
-                  color: Colors.white,
+                style: GoogleFonts.outfit(
+                  color: ClayColors.textDark,
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
                 ),
@@ -209,28 +219,23 @@ class _ModelDownloadScreenState extends ConsumerState<ModelDownloadScreen> {
               Text(
                 'To run offline, AURA needs to download a small AI model (~250MB). This happens only once.',
                 textAlign: TextAlign.center,
-                style: GoogleFonts.inter(
-                  color: Colors.white70,
+                style: GoogleFonts.outfit(
+                  color: ClayColors.textMuted,
                   fontSize: 16,
+                  height: 1.5,
                 ),
               ),
               const SizedBox(height: 48),
               if (_isDownloading) ...[
-                LinearProgressIndicator(
-                  value: _progress,
-                  backgroundColor: const Color(0xFF1a1a20),
-                  color: const Color(0xFFc69c3a),
-                  minHeight: 8,
-                  borderRadius: BorderRadius.circular(4),
-                ),
+                ClayProgressBar(value: _progress),
                 const SizedBox(height: 16),
                 Text(
                   _statusMessage ?? 'Preparing...',
-                  style: const TextStyle(color: Colors.white54),
+                  style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 14),
                 ),
-                const SizedBox(height: 24),
-                TextButton(
-                  onPressed: () async {
+                const SizedBox(height: 32),
+                ClayButton(
+                  onTap: () async {
                     if (_taskId != null) {
                        final runAnywhere = ref.read(runAnywhereProvider);
                        await runAnywhere.cancelDownload(_taskId!);
@@ -241,28 +246,32 @@ class _ModelDownloadScreenState extends ConsumerState<ModelDownloadScreen> {
                       _progress = 0;
                     });
                   },
-                  child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+                  baseColor: ClayColors.warmGrey,
+                  highlightColor: ClayColors.highlight,
+                  shadowColor: ClayColors.shadow,
+                  borderRadius: 14,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  child: Text('Cancel', style: GoogleFonts.outfit(color: ClayColors.textMuted)),
                 ),
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1a1a20),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.white10),
-                  ),
+                const SizedBox(height: 24),
+                ClayContainer(
+                  borderRadius: 16,
+                  depth: 4.0,
+                  baseColor: ClayColors.warmGrey,
+                  padding: const EdgeInsets.all(16),
                   child: Row(
                     children: [
-                      const Icon(Icons.info_outline, color: Colors.white54, size: 20),
+                      const Icon(Icons.info_outline_rounded, color: ClayColors.goldAccent, size: 20),
                       const SizedBox(width: 12),
                       Expanded(
-                        child: Text(
-                          'You can close the app. Download continues in background.',
-                          style: GoogleFonts.inter(
-                            color: Colors.white70,
-                            fontSize: 12,
+                          child: Text(
+                            'You can close the app. Download continues in background.',
+                            style: GoogleFonts.outfit(
+                              color: ClayColors.textMuted,
+                              fontSize: 12,
+                              height: 1.4,
+                            ),
                           ),
-                        ),
                       ),
                     ],
                   ),
@@ -270,26 +279,23 @@ class _ModelDownloadScreenState extends ConsumerState<ModelDownloadScreen> {
               ] else ...[
                  if (_error != null)
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
+                    padding: const EdgeInsets.only(bottom: 20),
                     child: Text(
                       _error!,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.redAccent),
+                      style: GoogleFonts.outfit(color: ClayColors.redAccent, fontWeight: FontWeight.w600),
                     ),
                   ),
-                ElevatedButton(
-                  onPressed: _startDownload,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFc69c3a),
-                    foregroundColor: const Color(0xFF0a0a0c),
-                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  child: const Text(
+                ClayButton(
+                  onTap: _startDownload,
+                  baseColor: ClayColors.goldAccent,
+                  highlightColor: ClayColors.goldHighlight,
+                  shadowColor: ClayColors.goldShadow,
+                  borderRadius: 18,
+                  padding: const EdgeInsets.symmetric(horizontal: 36, vertical: 16),
+                  child: Text(
                     'Download Model',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    style: GoogleFonts.outfit(fontSize: 16, fontWeight: FontWeight.bold, color: ClayColors.goldHighlight),
                   ),
                 ),
               ],

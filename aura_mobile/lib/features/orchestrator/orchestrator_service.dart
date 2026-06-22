@@ -18,6 +18,9 @@ import 'package:aura_mobile/domain/services/workflow_engine_service.dart';
 import 'package:aura_mobile/core/services/error_handler_service.dart';
 import 'package:aura_mobile/domain/services/study_service.dart';
 import 'package:aura_mobile/core/services/smart_app_actions_service.dart';
+import 'package:aura_mobile/features/orchestrator/tool_definition.dart';
+import 'package:aura_mobile/features/orchestrator/function_call_coordinator.dart';
+import 'package:aura_mobile/data/datasources/image_generation_service.dart';
 
 final orchestratorServiceProvider = Provider((ref) {
   final orchestrator = OrchestratorService(
@@ -54,6 +57,21 @@ class OrchestratorService {
   final ErrorHandlerService _errorHandler = ErrorHandlerService();
   WorkflowEngineService? _workflowEngine;
 
+  /// Free online text-to-image generation (Pollinations.ai, no key). Stateless,
+  /// so it is constructed directly rather than injected.
+  final ImageGenerationService _imageGen = ImageGenerationService();
+
+  /// The tool-definition set provided to tool-calling-capable models on each
+  /// inference call (Requirement 5.1). Each definition maps a tool name to one
+  /// of the orchestrator's existing handlers (memory, web search, app control,
+  /// etc.).
+  final List<ToolDefinition> _toolDefinitions = _buildToolDefinitions();
+
+  /// Parses and validates a tool-calling model's function-call emissions into
+  /// dispatchable requests (Requirements 5.2, 5.5, 5.6, 5.7).
+  late final FunctionCallCoordinator _functionCallCoordinator =
+      FunctionCallCoordinator.fromDefinitions(_toolDefinitions);
+
   OrchestratorService(
     this._intentService,
     this._memoryService,
@@ -89,6 +107,54 @@ class OrchestratorService {
     // If forced to chat (e.g. email draft prompt), skip all intent detection
     if (forceNormalChat) {
       yield* _handleLLMFlow(message, chatHistory, includeMemories: true, includeDocuments: hasDocuments);
+      return;
+    }
+
+    // 0a. Image generation (works for ALL models, online & free via Pollinations).
+    // "draw a cat", "generate an image of a sunset", etc. The generated image is
+    // a URL rendered inline by the chat bubble's markdown image support.
+    if (!forceNormalChat) {
+      final imgPrompt = ImageGenerationService.extractImagePrompt(message);
+      if (imgPrompt != null) {
+        debugPrint('ORCHESTRATOR: Image generation request -> "$imgPrompt"');
+        yield '🎨 Generating an image of "$imgPrompt"...\n\n';
+        yield _imageGen.buildChatImageMarkdown(imgPrompt);
+        return;
+      }
+    }
+
+    // 0. Native function calling (Layer 0) — only for tool-calling-capable models.
+    //
+    // When the active model exposes native function calling (Req 5.4), the model
+    // itself decides which tool to invoke, so we provide it the full tool
+    // definition set on the inference call (Req 5.1), then parse/validate/dispatch
+    // its emission to the same handlers the rule-based path uses (Req 5.3).
+    // Non-tool-calling models fall through to the existing rule-based detection
+    // below (Req 2.5, 5.4).
+    if (_llmService.supportsToolCalling) {
+      // Fast-path guard: trivially short messages and greetings should NEVER
+      // go through the tool-calling prompt — small models hallucinate tool calls
+      // (e.g. "hy" → open_settings). Route them straight to chat.
+      final msgTrimmed = message.trim();
+      final msgLower = msgTrimmed.toLowerCase();
+      final _greetGuard = RegExp(
+        r'^(hi+|hey+|hello+|hai|heyy+|hyy*|yo+|sup|howdy|greetings|namaste|'
+        r'good\s*(morning|afternoon|evening|night)|whats\s*up|'
+        r'how\s+are\s+you|how\s+r\s+u|hows\s+it\s+going|thanks|thank\s+you|'
+        r'ok|okay|bye|gm|gn|hola|bonjour|ciao)\s*[!?.]*$',
+        caseSensitive: false,
+      );
+      final words = msgLower.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+      final isShortNoKeyword = words.length <= 2 && !RegExp(
+        r'\b(torch|flashlight|camera|photo|selfie|call|dial|sms|text|'
+        r'email|mail|search|open|launch|remember|recall|settings|wifi|bluetooth)\b',
+        caseSensitive: false,
+      ).hasMatch(msgLower);
+      if (_greetGuard.hasMatch(msgLower) || isShortNoKeyword) {
+        yield* _handleLLMFlow(message, chatHistory, includeMemories: true, includeDocuments: hasDocuments);
+        return;
+      }
+      yield* _handleFunctionCalling(message, chatHistory, hasDocuments: hasDocuments);
       return;
     }
 
@@ -502,6 +568,393 @@ class OrchestratorService {
     }
   }
 
+  // ── Native Function Calling (Requirement 5) ──────────────────────────────
+
+  /// Builds the tool-definition set handed to tool-calling-capable models on
+  /// every inference call (Requirement 5.1). Every tool name maps to one of the
+  /// orchestrator's existing handlers; each definition declares its parameters
+  /// and which are required so the [FunctionCallCoordinator] can validate
+  /// emissions (Requirement 5.6).
+  static List<ToolDefinition> _buildToolDefinitions() {
+    return const [
+      ToolDefinition(name: 'store_memory', parameters: [
+        ToolParameter(name: 'content', required: true),
+      ]),
+      ToolDefinition(name: 'retrieve_memory', parameters: [
+        ToolParameter(name: 'query', required: true),
+      ]),
+      ToolDefinition(name: 'web_search', parameters: [
+        ToolParameter(name: 'query', required: true),
+      ]),
+      ToolDefinition(name: 'scrape_url', parameters: [
+        ToolParameter(name: 'url', required: true),
+      ]),
+      ToolDefinition(name: 'open_app', parameters: [
+        ToolParameter(name: 'appName', required: true),
+      ]),
+      ToolDefinition(name: 'open_settings', parameters: [
+        ToolParameter(name: 'type'),
+      ]),
+      ToolDefinition(name: 'open_camera'),
+      ToolDefinition(name: 'dial_contact', parameters: [
+        ToolParameter(name: 'contactName', required: true),
+      ]),
+      ToolDefinition(name: 'send_sms', parameters: [
+        ToolParameter(name: 'name', required: true),
+        ToolParameter(name: 'message'),
+      ]),
+      ToolDefinition(name: 'set_reminder', parameters: [
+        ToolParameter(name: 'time', required: true),
+        ToolParameter(name: 'title'),
+      ]),
+      ToolDefinition(name: 'navigation', parameters: [
+        ToolParameter(name: 'destination', required: true),
+      ]),
+      ToolDefinition(name: 'toggle_torch', parameters: [
+        ToolParameter(name: 'state'),
+      ]),
+      ToolDefinition(name: 'generate_image', parameters: [
+        ToolParameter(name: 'prompt', required: true),
+      ]),
+    ];
+  }
+
+  /// The tool-definition set this orchestrator presents to tool-calling models.
+  /// Exposed for property tests verifying Requirement 5.1 (the set handed to the
+  /// model equals the registry exactly).
+  @visibleForTesting
+  List<ToolDefinition> get toolDefinitions => _toolDefinitions;
+
+  /// Describes the available tools to the model as part of the system prompt so
+  /// a tool-calling model receives the full tool-definition set on the inference
+  /// call (Requirement 5.1).
+  String _buildToolSystemPrompt() => buildToolSystemPrompt(_toolDefinitions);
+
+  /// Pure encoding of a tool registry into the system prompt presented to a
+  /// tool-calling model. Every tool in [tools] is rendered as a
+  /// `- name(param[ (required)], ...)` line under an `Available tools:` header,
+  /// so the presentation losslessly carries each tool name and its declared
+  /// parameters (Requirement 5.1). Extracted as a pure function so the
+  /// registry→presentation mapping is directly testable.
+  @visibleForTesting
+  static String buildToolSystemPrompt(List<ToolDefinition> tools) {
+    final buffer = StringBuffer()
+      ..writeln('You are AURA, an on-device assistant that can call tools.')
+      ..writeln('When the user request maps to a tool, reply with ONLY a JSON '
+          'object of the form {"name": "<tool>", "arguments": { ... }} and '
+          'nothing else.')
+      ..writeln('If no tool applies, answer the user normally in plain text.')
+      ..writeln()
+      ..writeln('Available tools:');
+    for (final tool in tools) {
+      final params = tool.parameters
+          .map((p) => '${p.name}${p.required ? ' (required)' : ''}')
+          .join(', ');
+      buffer.writeln('- ${tool.name}($params)');
+    }
+    return buffer.toString();
+  }
+
+  /// Runs the native function-calling flow for a tool-calling-capable model.
+  ///
+  /// The model is given the full tool-definition set (Req 5.1); its emission is
+  /// parsed and validated by the [FunctionCallCoordinator]:
+  /// - a valid request is dispatched to its handler with the parsed parameters
+  ///   (Req 5.3);
+  /// - an unknown tool yields an unavailable-tool error and invokes no handler
+  ///   (Req 5.5);
+  /// - missing required parameters yield an error naming each one and invokes no
+  ///   handler (Req 5.6);
+  /// - an emission that is not a tool-call (the model chose to answer directly)
+  ///   is streamed back as the conversational response.
+  Stream<String> _handleFunctionCalling(
+    String message,
+    List<String> chatHistory, {
+    bool hasDocuments = false,
+  }) async* {
+    // ── Streaming-first approach to avoid double-inference deadlock ───────────
+    //
+    // The previous approach buffered ALL tokens, parsed for a JSON tool call,
+    // then re-ran _handleLLMFlow if the output was plain text (FunctionCallUnparseable).
+    // This causes Gemma (LiteRT) to deadlock: opening a second session on a model
+    // that just finished inference produces no tokens and hangs "Thinking...".
+    //
+    // Fix: check the first ~100 chars of the stream. If it starts like a JSON
+    // tool call, buffer fully and parse. If it's plain conversational text,
+    // stream it directly — no second inference needed.
+    //
+    // This also makes Gemma responses feel instant (streaming) vs. waiting for
+    // the entire generation before showing anything.
+
+    final previewBuf = StringBuffer();
+    bool isToolCall = false;
+    bool decided = false;
+    final fullBuf = StringBuffer();
+
+    // Temp stream buffer for the tokens received before we decide
+    final pendingTokens = <String>[];
+
+    try {
+      await for (final token in _llmService.chat(
+        message,
+        systemPrompt: _buildToolSystemPrompt(),
+        temperature: 0.3,
+      )) {
+        fullBuf.write(token);
+
+        if (!decided) {
+          previewBuf.write(token);
+          pendingTokens.add(token);
+
+          // After accumulating ~80 chars, decide: tool call or plain text?
+          if (previewBuf.length >= 80 || token.contains('\n')) {
+            final preview = previewBuf.toString().trimLeft();
+            // Tool calls always start with `{` (JSON object)
+            isToolCall = RegExp(r'^\{\s*"(name|tool|toolName|function)"\s*:').hasMatch(preview);
+            decided = true;
+
+            if (!isToolCall) {
+              // Plain text response — stream pending tokens out immediately
+              for (final t in pendingTokens) {
+                yield t;
+              }
+              pendingTokens.clear();
+            }
+          }
+        } else if (!isToolCall) {
+          // Already decided it's plain text — keep streaming
+          yield token;
+        }
+        // If isToolCall, we're still buffering in fullBuf
+      }
+    } catch (e) {
+      yield "❌ ${_errorHandler.handleError(e)}";
+      return;
+    }
+
+    // If we never decided (very short output), decide now
+    if (!decided) {
+      final preview = previewBuf.toString().trimLeft();
+      isToolCall = RegExp(r'^\{\s*"(name|tool|toolName|function)"\s*:').hasMatch(preview);
+      if (!isToolCall) {
+        for (final t in pendingTokens) {
+          yield t;
+        }
+      }
+    }
+
+    // If it was plain text, we're done — already streamed everything
+    if (!isToolCall) return;
+
+    // It looks like a tool call — parse the full buffered output
+    final raw = fullBuf.toString().trim();
+    final result = _functionCallCoordinator.parse(raw);
+
+    switch (result) {
+      case FunctionCallParsed(:final request):
+        debugPrint('ORCHESTRATOR: Function call -> ${request.toolName} ${request.arguments}');
+        yield* _dispatchToolCall(request, chatHistory, hasDocuments: hasDocuments);
+        break;
+      case FunctionCallUnknownTool(:final toolName):
+        yield "❌ The requested tool \"$toolName\" is unavailable.";
+        break;
+      case FunctionCallMissingParams(:final toolName, :final missing):
+        yield "❌ The tool \"$toolName\" is missing required parameter(s): ${missing.join(', ')}.";
+        break;
+      case FunctionCallUnparseable():
+        // Model produced something starting with `{` but it wasn't a valid tool call.
+        // Yield the raw text directly — no second inference (avoids Gemma deadlock).
+        if (raw.isNotEmpty) yield raw;
+        break;
+    }
+  }
+
+  /// Routes a validated [request] to the handler associated with its tool name,
+  /// passing the parsed parameter values (Requirement 5.3). Each branch reuses
+  /// the same actions the rule-based intent path invokes.
+  Stream<String> _dispatchToolCall(
+    FunctionCallRequest request,
+    List<String> chatHistory, {
+    bool hasDocuments = false,
+  }) async* {
+    final args = request.arguments;
+    String argStr(String key) => (args[key]?.toString() ?? '').trim();
+
+    switch (request.toolName) {
+      case 'store_memory':
+        try {
+          await _memoryService.saveMemory(argStr('content'));
+          yield "✅ Memory saved in your local vault.";
+        } catch (e) {
+          yield "❌ Failed to save memory: ${_errorHandler.handleError(e)}";
+        }
+        break;
+
+      case 'retrieve_memory':
+        try {
+          yield* _handleMemoryRetrieve(argStr('query'));
+        } catch (e) {
+          yield "❌ Failed to retrieve memories: ${_errorHandler.handleError(e)}";
+        }
+        break;
+
+      case 'web_search':
+        try {
+          yield* _handleWebSearch(argStr('query'));
+        } catch (e) {
+          yield "Web search failed: ${_errorHandler.handleError(e)}";
+        }
+        break;
+
+      case 'scrape_url':
+        try {
+          yield* _handleUrlScrape(argStr('url'));
+        } catch (e) {
+          yield "❌ Failed to read webpage: ${_errorHandler.handleError(e)}";
+        }
+        break;
+
+      case 'open_app':
+        final appName = argStr('appName');
+        yield "Opening $appName";
+        await _appControlService.openApp(appName);
+        yield "__DISMISS__";
+        break;
+
+      case 'open_settings':
+        final type = args['type'] != null && argStr('type').isNotEmpty
+            ? argStr('type')
+            : 'general';
+        yield "⚙️ **Opening ${type == 'general' ? 'Settings' : '$type Settings'}...**";
+        await _appControlService.openSettings(type);
+        break;
+
+      case 'open_camera':
+        yield "Opening Camera";
+        await _appControlService.openCamera();
+        yield "__DISMISS__";
+        break;
+
+      case 'dial_contact':
+        yield* _dispatchDialContact(argStr('contactName'));
+        break;
+
+      case 'send_sms':
+        yield* _dispatchSendSms(argStr('name'), argStr('message'));
+        break;
+
+      case 'set_reminder':
+        final title = argStr('title');
+        final time = argStr('time');
+        final reminderMessage =
+            title.isNotEmpty ? 'remind me to $title at $time' : 'remind me at $time';
+        yield* _handleReminderSet(reminderMessage);
+        break;
+
+      case 'navigation':
+        final destination = argStr('destination');
+        yield "Getting directions to $destination";
+        await _appControlService.openApp("navigate:$destination");
+        yield "__DISMISS__";
+        break;
+
+      case 'toggle_torch':
+        final stateArg = argStr('state').toLowerCase();
+        final state = !(stateArg == 'off' || stateArg == 'false' || stateArg == 'disable');
+        yield state ? "💡 **Turning Flashlight ON...**" : "🌑 **Turning Flashlight OFF...**";
+        try {
+          await _appControlService.toggleTorch(state);
+        } catch (e) {
+          yield "❌ Failed to toggle flashlight. It might not be available or permitted.";
+        }
+        break;
+
+      case 'generate_image':
+        final imgPrompt = argStr('prompt');
+        if (imgPrompt.isEmpty) {
+          yield "❌ Please describe the image you want generated.";
+        } else {
+          yield '🎨 Generating an image of "$imgPrompt"...\n\n';
+          yield _imageGen.buildChatImageMarkdown(imgPrompt);
+        }
+        break;
+
+      default:
+        // Defensive: the coordinator only emits FunctionCallParsed for known
+        // tools, so this is unreachable for registered tools.
+        yield "❌ The requested tool \"${request.toolName}\" is unavailable.";
+    }
+  }
+
+  /// Dial-contact dispatch shared shape with the rule-based handler, driven by
+  /// the structured `contactName` parameter.
+  Stream<String> _dispatchDialContact(String contactName) async* {
+    final matches = await _appControlService.resolveContacts(contactName);
+    if (matches.isEmpty) {
+      yield "Couldn't find a contact named $contactName. Try again with the exact name.";
+    } else if (matches.length == 1) {
+      final number = matches.first.phones.isNotEmpty ? matches.first.phones.first.number : '';
+      if (number.isNotEmpty) {
+        yield "Calling ${matches.first.displayName}";
+        await _appControlService.dialContact(number);
+        yield "__DISMISS__";
+      } else {
+        yield "Contact ${matches.first.displayName} has no phone number.";
+      }
+    } else {
+      final names = matches.take(5).toList();
+      final nameList = names
+          .asMap()
+          .entries
+          .map((e) => "${e.key + 1}. ${e.value.displayName}")
+          .join(", ");
+      yield "I found ${names.length} contacts similar to $contactName: $nameList. Say the number or tap to select. [[OPTIONS:${names.map((c) {
+        final number = c.phones.isNotEmpty ? c.phones.first.number : '';
+        return "${c.displayName}|call $number";
+      }).join(",")}]]";
+    }
+  }
+
+  /// Send-SMS dispatch driven by structured `name` and `message` parameters.
+  Stream<String> _dispatchSendSms(String name, String smsBody) async* {
+    if (name.isEmpty) {
+      yield "I couldn't understand who to send the message to. Please try again with the contact name.";
+      return;
+    }
+
+    // Reuse the existing AI body-enhancement heuristic.
+    if (smsBody.isNotEmpty && _llmService.isModelLoaded) {
+      smsBody = await _enhanceSMSBody(smsBody, name);
+    }
+
+    final matches = await _appControlService.resolveContacts(name);
+    if (matches.isEmpty) {
+      yield "Opening SMS to $name${smsBody.isNotEmpty ? ' with message: $smsBody' : ''}";
+      await _appControlService.sendSMS(name, smsBody);
+      yield "__DISMISS__";
+    } else if (matches.length == 1) {
+      final number = matches.first.phones.isNotEmpty ? matches.first.phones.first.number : '';
+      if (number.isNotEmpty) {
+        yield "Sending SMS to ${matches.first.displayName}${smsBody.isNotEmpty ? ': $smsBody' : ''}";
+        await _appControlService.sendSMS(number, smsBody);
+        yield "__DISMISS__";
+      } else {
+        yield "Contact ${matches.first.displayName} has no phone number.";
+      }
+    } else {
+      final names = matches.take(5).toList();
+      final nameList = names
+          .asMap()
+          .entries
+          .map((e) => "${e.key + 1}. ${e.value.displayName}")
+          .join(", ");
+      yield "I found ${names.length} contacts similar to $name: $nameList. Say the number or tap to select. [[OPTIONS:${names.map((c) {
+        final number = c.phones.isNotEmpty ? c.phones.first.number : '';
+        return "${c.displayName}|text $number $smsBody";
+      }).join(",")}]]";
+    }
+  }
+
   Stream<String> _handleMemoryRetrieve(String message) async* {
     try {
       final memories = await _memoryService.retrieveRelevantMemories(message);
@@ -696,12 +1149,11 @@ class OrchestratorService {
       includeMemories: includeMemories,
       includeDocuments: includeDocuments,
     );
-    // Use lower temperature when grounding on documents/memories (RAG mode)
-    // to reduce hallucination; higher temperature for pure creative chat
-    final temperature = (includeDocuments || includeMemories) ? 0.4 : 0.7;
 
-    // Give more tokens for code/writing tasks that need longer output
+    final tier = _llmService.modelTier;
     final lowerMsg = message.toLowerCase();
+
+    // ── Detect if this is a long-form writing task ──────────────────────────
     final needsMoreTokens = lowerMsg.contains('write') ||
         lowerMsg.contains('code') ||
         lowerMsg.contains('script') ||
@@ -711,9 +1163,33 @@ class OrchestratorService {
         lowerMsg.contains('build') ||
         lowerMsg.contains('implement') ||
         lowerMsg.contains('essay') ||
-        lowerMsg.contains('explain in detail');
+        lowerMsg.contains('explain in detail') ||
+        lowerMsg.contains('list all') ||
+        lowerMsg.contains('step by step');
 
-    final maxTokens = needsMoreTokens ? 1024 : 512;
+    // ── Token budget: capped aggressively for small/medium models ───────────
+    // Qwen 1.5B hallucinates and repeats when given too many tokens to fill.
+    // Short answers = faster + more accurate. Writing tasks get more room.
+    final int maxTokens;
+    if (tier.isSmall) {
+      maxTokens = needsMoreTokens ? 384 : 192; // 0.5B: very tight budget
+    } else if (tier == ModelTier.medium) {
+      maxTokens = needsMoreTokens ? 512 : 256; // 1.5B: moderate budget
+    } else {
+      maxTokens = needsMoreTokens ? 1024 : 512; // 3B+: full budget
+    }
+
+    // ── Temperature: factual/grounded tasks get lower temp to reduce hallucination
+    // Medium models (1.5B) should always run cooler — they hallucinate more
+    // at high temperatures than larger models do.
+    final double temperature;
+    if (includeDocuments || includeMemories) {
+      temperature = 0.3; // RAG mode: stay close to source
+    } else if (tier.isSmall || tier == ModelTier.medium) {
+      temperature = 0.4; // Small/medium models: less creative wandering
+    } else {
+      temperature = 0.65; // Large models: slightly creative but not wild
+    }
 
     yield* _llmService.chat(prompt, temperature: temperature, maxTokens: maxTokens);
   }
@@ -954,6 +1430,87 @@ class OrchestratorService {
       return null;
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Parses a natural-language instruction into a structured tool call JSON.
+  /// Returns null if it is normal chat or cannot be parsed.
+  Future<String?> parseInstructionToToolCall(String instruction) async {
+    // 1. Detect intent using rule-based
+    final intent = await _intentService.detectIntent(instruction);
+    
+    // 2. Map to structured JSON
+    switch (intent) {
+      case IntentType.torchControl:
+        final lo = instruction.toLowerCase();
+        final state = !(lo.contains("off") || lo.contains("disable") || lo.contains("stop"));
+        return '{"name": "toggle_torch", "arguments": {"state": "${state ? "on" : "off"}"}}';
+        
+      case IntentType.openCamera:
+        return '{"name": "open_camera", "arguments": {}}';
+        
+      case IntentType.openSettings:
+        final type = _intentService.extractSettingsType(instruction);
+        return '{"name": "open_settings", "arguments": {"type": "$type"}}';
+        
+      case IntentType.openApp:
+        final appName = _intentService.extractAppName(instruction);
+        return '{"name": "open_app", "arguments": {"appName": "$appName"}}';
+        
+      case IntentType.dialContact:
+        final contactName = _intentService.extractContactName(instruction);
+        return '{"name": "dial_contact", "arguments": {"contactName": "$contactName"}}';
+        
+      case IntentType.sendSMS:
+        final details = _intentService.extractSMSDetails(instruction);
+        final name = details['name'] ?? '';
+        final body = details['message'] ?? '';
+        return '{"name": "send_sms", "arguments": {"name": "$name", "message": "$body"}}';
+        
+      case IntentType.reminderSet:
+        return '{"name": "set_reminder", "arguments": {"title": "$instruction", "time": "scheduled"}}';
+        
+      case IntentType.navigation:
+        final dest = _intentService.extractNavigationDestination(instruction);
+        return '{"name": "navigation", "arguments": {"destination": "$dest"}}';
+        
+      case IntentType.webSearch:
+        final query = _intentService.extractSearchQuery(instruction);
+        return '{"name": "web_search", "arguments": {"query": "$query"}}';
+        
+      case IntentType.urlScrape:
+        final url = _intentService.extractUrl(instruction);
+        return '{"name": "scrape_url", "arguments": {"url": "$url"}}';
+        
+      case IntentType.memoryStore:
+        final content = _intentService.extractMemoryContent(instruction);
+        return '{"name": "store_memory", "arguments": {"content": "$content"}}';
+        
+      case IntentType.memoryRetrieve:
+        return '{"name": "retrieve_memory", "arguments": {"query": "$instruction"}}';
+        
+      default:
+        // Try LLM parsing if loaded
+        if (_llmService.isModelLoaded) {
+          final buffer = StringBuffer();
+          try {
+            await for (final token in _llmService.chat(
+              instruction,
+              systemPrompt: _buildToolSystemPrompt(),
+              temperature: 0.3,
+            )) {
+              buffer.write(token);
+            }
+            final raw = buffer.toString().trim();
+            final result = _functionCallCoordinator.parse(raw);
+            if (result is FunctionCallParsed) {
+              return raw;
+            }
+          } catch (e) {
+            debugPrint("LLM parsing failed: $e");
+          }
+        }
+        return null;
     }
   }
 }

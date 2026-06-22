@@ -1,3 +1,6 @@
+import 'dart:math';
+import 'dart:typed_data';
+
 import 'package:aura_mobile/ai/run_anywhere_service.dart';
 
 /// Tier of the currently loaded model, used to adapt prompt complexity and behavior.
@@ -17,11 +20,31 @@ abstract class LLMService {
   Future<void> initialize();
   Future<void> loadModel(String modelPath);
   /// [temperature] controls randomness: 0.3 = factual/grounded, 0.7 = creative/conversational.
-  Stream<String> chat(String prompt, {String? systemPrompt, int maxTokens, double temperature});
+  ///
+  /// [imageBytes], when provided, attaches an image to the turn for multimodal
+  /// (vision) models. Text-only engines ignore it. Only models that report
+  /// [supportsVision] will actually process the image.
+  Stream<String> chat(String prompt,
+      {String? systemPrompt, int maxTokens, double temperature, Uint8List? imageBytes});
   bool get isModelLoaded;
 
   /// The tier of the currently loaded model, based on file name detection.
   ModelTier get modelTier;
+
+  /// Whether the currently active model supports native function/tool calling.
+  ///
+  /// Defaults to `false` so existing engines (GGUF/Qwen) and any implementation
+  /// that predates multi-engine support keep using the orchestrator's
+  /// rule-based intent detection. Engines that front tool-calling-capable
+  /// models (e.g. the LiteRT Gemma 4 family via the Engine_Router) override
+  /// this to return `true` when such a model is active. This keeps the
+  /// interface backward compatible (Requirements 2.5, 5.4).
+  bool get supportsToolCalling => false;
+
+  /// Whether the currently active model can accept image input (multimodal
+  /// vision). Defaults to `false`; vision-capable engines override it when a
+  /// vision model is active.
+  bool get supportsVision => false;
 }
 
 class LLMServiceImpl implements LLMService {
@@ -39,19 +62,57 @@ class LLMServiceImpl implements LLMService {
     await _runAnywhere.loadModel(modelPath);
   }
 
+  /// Unloads the currently loaded GGUF model, freeing the fllama context.
+  ///
+  /// Called by the EngineRouter when switching from GGUF to LiteRT so the
+  /// fllama context's native memory is released. Idempotent.
+  Future<void> unload() async {
+    try {
+      _runAnywhere.unloadModel();
+    } catch (_) {
+      // Best-effort; ignore failures.
+    }
+  }
+
   @override
   bool get isModelLoaded => _runAnywhere.isModelLoaded;
 
   @override
-  ModelTier get modelTier {
-    final path = _runAnywhere.currentModelPath?.toLowerCase() ?? '';
-    if (path.contains('0.5b') || path.contains('0_5b')) return ModelTier.small;
-    if (path.contains('1.5b') || path.contains('1_5b')) return ModelTier.medium;
-    return ModelTier.large; // 3B, 7B, or unknown defaults to large
+  ModelTier get modelTier => modelTierForPath(_runAnywhere.currentModelPath);
+
+  @override
+  bool get supportsToolCalling => false;
+
+  @override
+  bool get supportsVision => false;
+
+  /// Pure file-name based tier detection.
+  ///
+  /// Maps a GGUF model file name (or path) to its [ModelTier]: a name encoding
+  /// 0.5B -> [ModelTier.small], 1.5B -> [ModelTier.medium], anything else
+  /// (3B, 7B, or unknown) -> [ModelTier.large]. Detection is case-insensitive
+  /// and accepts both `.` and `_` as the decimal separator in the size marker.
+  ///
+  /// Exposed as a pure static function so the mapping can be verified directly.
+  static ModelTier modelTierForPath(String? modelPath) {
+    final path = modelPath?.toLowerCase() ?? '';
+    // Small tier: ~0.5–0.6B models (weak instruction following).
+    if (path.contains('0.5b') || path.contains('0_5b') ||
+        path.contains('0.6b') || path.contains('0-6b')) {
+      return ModelTier.small;
+    }
+    // Medium tier: ~1.5–1.7B models.
+    if (path.contains('1.5b') || path.contains('1_5b') ||
+        path.contains('1.7b') || path.contains('1-7b')) {
+      return ModelTier.medium;
+    }
+    return ModelTier.large; // 3B, 4B, 7B, or unknown defaults to large
   }
 
   @override
-  Stream<String> chat(String prompt, {String? systemPrompt, int maxTokens = 512, double temperature = 0.7}) {
+  Stream<String> chat(String prompt, {String? systemPrompt, int maxTokens = 512, double temperature = 0.7, Uint8List? imageBytes}) {
+    // The GGUF engine is text-only; imageBytes is ignored (vision is handled by
+    // the LiteRT engine for multimodal Gemma models).
     final raw = _runAnywhere.chat(
       prompt: prompt,
       systemPrompt: systemPrompt,
@@ -61,21 +122,97 @@ class LLMServiceImpl implements LLMService {
 
     // Apply output cleaning to ALL models — even large models can leak
     // stop tokens like <|endoftext|>, Human:, User: etc.
-    return _cleanModelOutput(raw);
+    return cleanModelOutput(raw);
   }
 
   /// Post-processing for model output — catches hallucinated conversation
   /// continuations and repetition loops that all model sizes can produce.
-  Stream<String> _cleanModelOutput(Stream<String> raw) async* {
+  ///
+  /// Exposed as a pure static function (it depends only on its input stream,
+  /// not on instance state) so the cleaning behavior can be verified directly
+  /// without standing up the native engine.
+  /// Stop/hallucination markers that terminate the stream. The cleaner
+  /// truncates output at the first occurrence of any of these.
+  ///
+  /// Markers fall into two categories:
+  /// - [_unconditionalMarkers]: tokens that are NEVER valid in user-facing
+  ///   output (chat-template control tokens like `<|im_end|>`).
+  /// - [_lineStartMarkers]: words like "Human:" / "User:" that signal a
+  ///   hallucinated turn ONLY when they appear at the start of a line. If
+  ///   matched anywhere they would falsely truncate legit prose like
+  ///   "I told the User: yes, I can help".
+  static const List<String> _unconditionalMarkers = [
+    '<|endoftext|>',
+    '<|im_end|>',
+    '<|im_start|>',
+    'ASSISTANT RESPONSE',
+    'USER REQUEST',
+    'CURRENT USER REQUEST',
+  ];
+
+  static const List<String> _lineStartMarkers = [
+    'Human:',
+    'User:',
+  ];
+
+  static Stream<String> cleanModelOutput(Stream<String> raw) async* {
     int repeatCount = 0;
     String lastToken = '';
     final recentSentences = <String>[];
     final sentenceBuffer = StringBuffer();
-    // Buffer to detect multi-token stop sequences like "<|" + "endoftext" + "|>"
-    final tokenWindow = StringBuffer();
+
+    // Combined marker list for length calculation only — actual matching
+    // is split between unconditional and line-start checks below.
+    final allMarkers = [..._unconditionalMarkers, ..._lineStartMarkers];
+    final maxMarkerLen = allMarkers.map((m) => m.length).reduce(max);
+
+    // `pending` holds accepted clean text that has NOT yet been emitted because
+    // its trailing portion could be the start of a marker that completes in a
+    // later token (markers can be split across streamed tokens). Anything we
+    // emit from `pending` is guaranteed not to be part of a marker.
+    final pending = StringBuffer();
+
+    // Tracks how many characters of clean output we've emitted, so we can tell
+    // whether a "Human:"/"User:" match is at line-start.
+    final emitted = StringBuffer();
+
+    /// Returns the earliest match index of any marker in [combined], using the
+    /// rule that line-start markers only count when preceded by `\n` or at
+    /// position 0 of the FULL emitted+combined stream.
+    int findEarliestMarker(String combined, int emittedLen) {
+      int earliest = -1;
+
+      // Unconditional markers — match anywhere.
+      for (final m in _unconditionalMarkers) {
+        final idx = combined.indexOf(m);
+        if (idx >= 0 && (earliest < 0 || idx < earliest)) earliest = idx;
+      }
+
+      // Line-start markers — match only when preceded by `\n` or at the very
+      // start of the conversation output (emittedLen == 0 && idx == 0).
+      for (final m in _lineStartMarkers) {
+        int searchFrom = 0;
+        while (true) {
+          final idx = combined.indexOf(m, searchFrom);
+          if (idx < 0) break;
+          // Determine the character immediately before this match in the
+          // full output (emitted text + this combined buffer).
+          final isLineStart = idx == 0
+              ? (emittedLen == 0 ? true : emitted.toString().endsWith('\n'))
+              : combined[idx - 1] == '\n';
+          if (isLineStart) {
+            if (earliest < 0 || idx < earliest) earliest = idx;
+            break;
+          }
+          searchFrom = idx + 1;
+        }
+      }
+
+      return earliest;
+    }
 
     await for (final token in raw) {
-      // 1. Token-level repeat detection
+      // 1. Token-level repeat detection — the repeating token is dropped.
       if (token == lastToken && token.trim().isNotEmpty) {
         repeatCount++;
         if (repeatCount >= 4) break;
@@ -84,41 +221,24 @@ class LLMServiceImpl implements LLMService {
       }
       lastToken = token;
 
-      // 2. Build a sliding window to catch multi-token stop sequences
-      tokenWindow.write(token);
-      final window = tokenWindow.toString();
+      // 2. Marker detection across the token boundary. Combine the held-back
+      // text with the new token so a marker split across tokens is found.
+      final combined = pending.toString() + token;
 
-      // Check for leaked markers that signal the model is hallucinating new turns
-      if (window.contains('<|endoftext|>') ||
-          window.contains('<|im_end|>') ||
-          window.contains('<|im_start|>') ||
-          window.contains('Human:') ||
-          window.contains('User:') ||
-          window.contains('ASSISTANT RESPONSE') ||
-          window.contains('USER REQUEST') ||
-          window.contains('CURRENT USER REQUEST')) {
-        // Yield everything BEFORE the marker, then stop
-        final cutPoints = ['<|endoftext|>', '<|im_end|>', '<|im_start|>', 'Human:', 'User:', 'ASSISTANT RESPONSE', 'USER REQUEST', 'CURRENT USER REQUEST'];
-        for (final cut in cutPoints) {
-          final idx = window.indexOf(cut);
-          if (idx >= 0) {
-            // Only yield the clean part before the marker (from this token)
-            final cleanPart = token.substring(0, token.length - (window.length - idx));
-            if (cleanPart.isNotEmpty) yield cleanPart;
-            return; // Stop generation
-          }
+      final markerIdx = findEarliestMarker(combined, emitted.length);
+      if (markerIdx >= 0) {
+        // Emit only the clean text before the first marker, then stop.
+        final cleanPart = combined.substring(0, markerIdx);
+        if (cleanPart.isNotEmpty) {
+          yield cleanPart;
+          emitted.write(cleanPart);
         }
-        break;
+        return;
       }
 
-      // Keep window small — only last 50 chars needed for detection
-      if (tokenWindow.length > 50) {
-        final str = tokenWindow.toString();
-        tokenWindow.clear();
-        tokenWindow.write(str.substring(str.length - 30));
-      }
-
-      // 3. Sentence-level repeat check (catches paragraph loops)
+      // 3. Sentence-level repeat check (catches paragraph loops). On a repeat
+      // the current token is dropped; previously accepted text is flushed
+      // after the loop.
       sentenceBuffer.write(token);
       if (token.contains('.') || token.contains('!') || token.contains('?') || token.contains('\n')) {
         final sentence = sentenceBuffer.toString().trim();
@@ -137,7 +257,40 @@ class LLMServiceImpl implements LLMService {
         sentenceBuffer.clear();
       }
 
-      yield token;
+      // 4. No complete marker yet. Hold back the longest suffix of `combined`
+      // that is a proper prefix of some marker (it may still become a marker);
+      // emit everything before it.
+      int holdBack = 0;
+      final maxCheck = min(combined.length, maxMarkerLen - 1);
+      for (var len = maxCheck; len > 0; len--) {
+        final suffix = combined.substring(combined.length - len);
+        var isMarkerPrefix = false;
+        for (final marker in allMarkers) {
+          if (marker.length > len && marker.startsWith(suffix)) {
+            isMarkerPrefix = true;
+            break;
+          }
+        }
+        if (isMarkerPrefix) {
+          holdBack = len;
+          break;
+        }
+      }
+
+      final emitLen = combined.length - holdBack;
+      if (emitLen > 0) {
+        final part = combined.substring(0, emitLen);
+        yield part;
+        emitted.write(part);
+      }
+      pending
+        ..clear()
+        ..write(combined.substring(emitLen));
     }
+
+    // Stream ended (or a loop was broken) with no marker: the held-back text
+    // can never become a marker, so emit it.
+    final remaining = pending.toString();
+    if (remaining.isNotEmpty) yield remaining;
   }
 }

@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:aura_mobile/domain/services/document_service.dart';
@@ -12,6 +16,9 @@ import 'package:aura_mobile/domain/repositories/chat_history_repository.dart';
 import 'package:aura_mobile/core/providers/repository_providers.dart';
 import 'package:aura_mobile/presentation/providers/chat_history_provider.dart';
 import 'package:aura_mobile/presentation/providers/model_selector_provider.dart';
+import 'package:aura_mobile/presentation/providers/context_window_provider.dart';
+import 'package:aura_mobile/features/automation/application/automation_engine.dart';
+import 'package:aura_mobile/features/automation/domain/automation_rule.dart';
 
 // Voice Service
 final voiceServiceProvider = Provider((ref) => VoiceService());
@@ -82,13 +89,34 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final modelPath = prefs.getString('selected_model_path');
       
       if (modelPath != null && modelPath.isNotEmpty) {
-        print('ChatNotifier: Auto-loading model from $modelPath');
+        // Check if the last load crashed (e.g. native SIGSEGV)
+        final crashed = prefs.getBool('model_load_crashed_sentinel') ?? false;
+        if (crashed) {
+          debugPrint('ChatNotifier: Detected crash during last model load. Clearing model path to prevent boot loop.');
+          await prefs.remove('selected_model_path');
+          await prefs.remove('active_model_id');
+          await prefs.setBool('model_load_crashed_sentinel', false);
+          return;
+        }
+
+        // Set sentinel before loading
+        await prefs.setBool('model_load_crashed_sentinel', true);
+
+        debugPrint('ChatNotifier: Auto-loading model from $modelPath');
         await llmService.loadModel(modelPath);
+
+        // Clear sentinel on success
+        await prefs.setBool('model_load_crashed_sentinel', false);
       } else {
-        print('ChatNotifier: No model selected. User must select a model.');
+        debugPrint('ChatNotifier: No model selected. User must select a model.');
       }
+      _ref.read(contextWindowProvider.notifier).updateModelTier(llmService.modelTier);
     } catch (e) {
-      print('Error initializing AI: $e');
+      debugPrint('Error initializing AI: $e');
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('model_load_crashed_sentinel', false);
+      } catch (_) {}
     } finally {
       state = state.copyWith(isModelLoading: false);
     }
@@ -108,9 +136,23 @@ class ChatNotifier extends StateNotifier<ChatState> {
       sessionId: fullSession.id,
       messages: fullSession.messages,
     );
+    _ref.read(contextWindowProvider.notifier).updateFromMessagesFast(state.messages);
   }
 
+  // Debounce timer for _saveChat — collapses rapid save calls during streaming
+  // into a single SQLite write 800ms after the last update. Prevents the
+  // chat-history DB write (~30-100ms each) from being run on every token.
+  Timer? _saveDebounce;
+
   Future<void> _saveChat() async {
+    // Debounce: replace any pending save with a new one. The actual write
+    // happens 800ms after the LAST call (which is typically when streaming
+    // finishes), so the long conversation file is only written once per turn.
+    _saveDebounce?.cancel();
+    _saveDebounce = Timer(const Duration(milliseconds: 800), _doSaveChat);
+  }
+
+  Future<void> _doSaveChat() async {
     if (state.messages.isEmpty) return;
     
     try {
@@ -143,7 +185,72 @@ class ChatNotifier extends StateNotifier<ChatState> {
       // Invalidate history provider to refresh list
       _ref.invalidate(chatHistoryProvider);
     } catch (e) {
-      print("Error saving chat: $e");
+      debugPrint("Error saving chat: $e");
+    }
+  }
+
+  /// Sends a [prompt] together with an [imageBytes] image to the active model
+  /// for multimodal (vision) analysis. Only works when the active model
+  /// reports vision support; otherwise it degrades to a text-only message.
+  ///
+  /// Vision goes straight to the model (bypassing the rule-based orchestrator
+  /// intent layer) because the image itself is the context.
+  Future<void> sendImageMessage(String prompt, Uint8List imageBytes) async {
+    final modelState = _ref.read(modelSelectorProvider);
+    if (modelState.activeModelId == null || state.isModelLoading) {
+      return;
+    }
+    if (_isProcessing) return;
+
+    final llmService = _ref.read(llmServiceProvider);
+    // If the active model has no vision, degrade gracefully to a text turn so
+    // the user still gets a response instead of a silent failure.
+    if (!llmService.supportsVision) {
+      await sendMessage(prompt);
+      return;
+    }
+
+    _isProcessing = true;
+
+    state = state.copyWith(
+      messages: [...state.messages, {'role': 'user', 'content': prompt}],
+      isThinking: true,
+    );
+    _saveChat();
+    state = state.copyWith(
+      messages: [...state.messages, {'role': 'assistant', 'content': ''}],
+    );
+
+    try {
+      String fullResponse = '';
+      await for (final chunk in llmService.chat(
+        prompt,
+        imageBytes: imageBytes,
+        temperature: 0.4,
+        maxTokens: 1024,
+      )) {
+        fullResponse += chunk;
+        final cleaned = _truncateAtHallucination(fullResponse);
+        if (cleaned != null) {
+          fullResponse = cleaned;
+          _updateLastMessage(fullResponse);
+          break;
+        }
+        _updateLastMessage(fullResponse);
+      }
+      if (fullResponse.isEmpty) {
+        _updateLastMessage(
+            "I couldn't analyze that image. Try a clearer photo or a different model.");
+      }
+      _saveChat();
+      _ref.read(contextWindowProvider.notifier).updateFromMessagesFast(state.messages);
+    } catch (e) {
+      debugPrint('Error in sendImageMessage: $e');
+      _updateLastMessage(
+          "I couldn't analyze that image. Make sure a vision model (e.g. Gemma 4) is loaded.");
+    } finally {
+      state = state.copyWith(isThinking: false);
+      _isProcessing = false;
     }
   }
 
@@ -151,15 +258,53 @@ class ChatNotifier extends StateNotifier<ChatState> {
     // 0. Safety Checks
     final modelState = _ref.read(modelSelectorProvider);
     if (modelState.activeModelId == null || state.isModelLoading) {
-      print('Model not ready, ignoring message');
+      debugPrint('Model not ready, ignoring message');
       return;
     }
 
     // Prevent concurrent LLM calls
     if (_isProcessing) {
-      print('Already processing a message, ignoring new request');
+      debugPrint('Already processing a message, ignoring new request');
       return;
     }
+
+    // Check conversation triggers
+    try {
+      final engine = _ref.read(automationEngineProvider);
+      final rules = await engine.getAllRules();
+      for (final rule in rules) {
+        if (rule.isEnabled && rule.triggerType == TriggerType.conversationPattern) {
+          final pattern = rule.condition ?? '';
+          if (pattern.isNotEmpty && text.toLowerCase().contains(pattern.toLowerCase())) {
+            _isProcessing = true;
+            state = state.copyWith(
+              messages: [...state.messages, {'role': 'user', 'content': text}],
+              isThinking: true,
+            );
+            _saveChat();
+
+            final result = await engine.executeRuleNow(rule);
+
+            state = state.copyWith(
+              messages: [
+                ...state.messages,
+                {
+                  'role': 'system',
+                  'content': 'automation_triggered:${rule.name} - $result'
+                }
+              ],
+              isThinking: false,
+            );
+            _saveChat();
+            _isProcessing = false;
+            return; // Intercepted & processed by workflow
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('ChatNotifier: Conversation trigger check failed: $e');
+    }
+
     _isProcessing = true;
 
     // 0.5. Sync active persona system prompt
@@ -177,6 +322,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
       isThinking: true,
     );
     _saveChat(); // Save after user message
+    _ref.read(contextWindowProvider.notifier).updateFromMessagesFast(state.messages);
+    final baselineTokens = _ref.read(contextWindowProvider).estimatedTokens;
     
     // Placeholder for Assistant Response
     state = state.copyWith(
@@ -192,9 +339,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
             .map((m) => "${m['role'] == 'user' ? 'User' : 'Assistant'}: ${m['content']}")
             .toList();
             
-      // Limit history to last 3 messages to match context_builder_service pruning
-      final history = allHistory.length > 3
-          ? allHistory.sublist(allHistory.length - 3)
+      // Pass a generous slice of recent history; the context builder applies
+      // the final, tier-aware pruning to fit the model's context window.
+      final history = allHistory.length > 12
+          ? allHistory.sublist(allHistory.length - 12)
           : allHistory;
 
       // Check if documents are available
@@ -202,9 +350,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final hasDocuments = await documentService.hasDocuments();
 
       // Delegate to Orchestrator
-      print("ChatNotifier: Delegating message to Orchestrator");
+      debugPrint("ChatNotifier: Delegating message to Orchestrator");
+      final isConcise = _ref.read(conciseModeProvider);
       final stream = orchestrator.processMessage(
-        message: text,
+        message: isConcise 
+            ? '$text\n\n[System Instruction: Please keep your response extremely concise, direct, and under 2-3 sentences.]'
+            : text,
         chatHistory: history,
         hasDocuments: hasDocuments,
       );
@@ -244,17 +395,19 @@ class ChatNotifier extends StateNotifier<ChatState> {
         if (cleaned != null) {
           fullResponse = cleaned;
           _updateLastMessage(fullResponse);
-          print('ChatNotifier: Hallucination marker detected — truncated response');
+          debugPrint('ChatNotifier: Hallucination marker detected — truncated response');
           break; // Stop consuming the stream entirely
         }
 
         _updateLastMessage(fullResponse);
+        _ref.read(contextWindowProvider.notifier).updateStreamingTokens(baselineTokens, fullResponse);
       }
-      print('ChatNotifier: Stream completed. Full response length: ${fullResponse.length}');
+      debugPrint('ChatNotifier: Stream completed. Full response length: ${fullResponse.length}');
       _saveChat(); // Save after full response
+      _ref.read(contextWindowProvider.notifier).updateFromMessagesFast(state.messages);
 
     } catch (e) {
-      print('Error in sendMessage: $e');
+      debugPrint('Error in sendMessage: $e');
       // Only show error if we have no partial response — otherwise keep what was generated
       final lastMsg = state.messages.isNotEmpty ? state.messages.last : null;
       final hasContent = lastMsg != null && 
@@ -263,7 +416,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       if (!hasContent) {
         // Retry once before giving up
         try {
-          print('ChatNotifier: Retrying inference...');
+          debugPrint('ChatNotifier: Retrying inference...');
           await Future.delayed(const Duration(milliseconds: 500));
           final orchestrator = _ref.read(orchestratorServiceProvider);
           final retryStream = orchestrator.processMessage(
@@ -280,7 +433,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
             _updateLastMessage('The AI model is having trouble responding. Try restarting the app or using a simpler prompt.');
           }
         } catch (retryError) {
-          print('ChatNotifier: Retry also failed: $retryError');
+          debugPrint('ChatNotifier: Retry also failed: $retryError');
           _updateLastMessage('The AI model is having trouble responding. Try restarting the app or using a simpler prompt.');
         }
       }
@@ -295,22 +448,26 @@ class ChatNotifier extends StateNotifier<ChatState> {
   /// Detects hallucinated stop markers / fake conversation turns in the full
   /// accumulated response. Returns the truncated clean text if a marker is
   /// found, or null if the response is still clean.
+  ///
+  /// Markers must appear at line-start (preceded by `\n`) for `Human:`/`User:`/
+  /// `Assistant:` to avoid truncating legit prose like
+  /// "I told the User: yes, I can help".
   static final List<String> _hallucinationMarkers = [
+    // Unconditional control tokens — never appear in valid output
     '<|endoftext|>',
     '<|im_end|>',
     '<|im_start|>',
     '<|end|>',
-    '\nHuman:',
-    '\nUser:',
-    '\nHuman :',
-    '\nUser :',
-    'Human: ',
-    'User: ',
-    '\nAssistant:',
     'CURRENT USER REQUEST',
     'ASSISTANT RESPONSE',
     'USER REQUEST',
     '__DISMISS__',
+    // Line-start hallucination markers — model trying to fake a turn
+    '\nHuman:',
+    '\nUser:',
+    '\nHuman :',
+    '\nUser :',
+    '\nAssistant:',
   ];
 
   String? _truncateAtHallucination(String response) {
@@ -347,7 +504,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     // Ensure initialized
     final ok = await voiceService.initialize();
     if (!ok) {
-      print('VoiceService initialization failed');
+      debugPrint('VoiceService initialization failed');
       return;
     }
 
@@ -411,8 +568,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
           .toList();
       final limitedHistory = history.length > 3 ? history.sublist(history.length - 3) : history;
 
+      final isConcise = _ref.read(conciseModeProvider);
       final stream = orchestrator.processMessage(
-        message: text,
+        message: isConcise
+            ? '$text\n\n[System Instruction: Please keep your response extremely concise, direct, and under 2-3 sentences.]'
+            : text,
         chatHistory: limitedHistory,
         hasDocuments: false,
         isVoiceQuery: true,
@@ -440,8 +600,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
       }
 
       _saveChat();
+      _ref.read(contextWindowProvider.notifier).updateFromMessagesFast(state.messages);
     } catch (e) {
-      print('Voice sendMessage error: $e');
+      debugPrint('Voice sendMessage error: $e');
       if (fullResponse.isEmpty) {
         fullResponse = "Sorry, I couldn't process that. Try again.";
         _updateLastMessage(fullResponse);
@@ -454,12 +615,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
     // 2. Speak the response
     if (fullResponse.isNotEmpty && _isVoiceConversationActive) {
       try {
-        print('VOICE: Speaking response (${fullResponse.length} chars)');
+        debugPrint('VOICE: Speaking response (${fullResponse.length} chars)');
         final voiceService = _ref.read(voiceServiceProvider);
         await voiceService.speak(fullResponse);
-        print('VOICE: TTS done');
+        debugPrint('VOICE: TTS done');
       } catch (e) {
-        print('VOICE: TTS failed: $e');
+        debugPrint('VOICE: TTS failed: $e');
       }
     }
 
@@ -482,7 +643,24 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void clearChat() {
-     _startNewSession();
+    // Stop any active voice conversation loop to prevent the mic from staying
+    // open after the user clears the chat (battery + privacy fix).
+    stopVoiceConversation();
+    _startNewSession();
+  }
+
+  @override
+  void dispose() {
+    // Make sure the voice loop terminates when the notifier is destroyed —
+    // otherwise the recursive startListening loop keeps holding the mic.
+    _isVoiceConversationActive = false;
+    try {
+      final voiceService = _ref.read(voiceServiceProvider);
+      voiceService.stopListening();
+      voiceService.stopSpeaking();
+    } catch (_) {/* best-effort cleanup */}
+    _saveDebounce?.cancel();
+    super.dispose();
   }
 
   void addOfflineMessage(Map<String, String> message) {
@@ -492,6 +670,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _saveChat();
   }
 }
+
+class ConciseModeNotifier extends StateNotifier<bool> {
+  ConciseModeNotifier() : super(false);
+  void toggle() => state = !state;
+}
+
+final conciseModeProvider = StateNotifierProvider<ConciseModeNotifier, bool>((ref) {
+  return ConciseModeNotifier();
+});
 
 final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
   return ChatNotifier(ref);

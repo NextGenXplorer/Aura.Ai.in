@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:aura_mobile/presentation/widgets/clay_components.dart';
 
 class VoiceAssistantSettingsPage extends StatefulWidget {
   const VoiceAssistantSettingsPage({super.key});
@@ -124,10 +125,6 @@ class _VoiceAssistantSettingsPageState
   // UI helpers
   // ─────────────────────────────────────────────────────────────────────────
 
-  static const _gold = Color(0xFFc69c3a);
-  static const _bg = Color(0xFF0E0E14);
-  static const _cardBg = Color(0xFF1A1A24);
-
   Widget _buildPermissionCard({
     required String label,
     required String description,
@@ -136,7 +133,7 @@ class _VoiceAssistantSettingsPageState
     required Permission permission,
   }) {
     final status = _statuses[key];
-    final bool? granted = status == null ? null : status.isGranted;
+    final bool? granted = status?.isGranted;
     final isPermanent = status?.isPermanentlyDenied ?? false;
 
     Color statusColor;
@@ -144,101 +141,116 @@ class _VoiceAssistantSettingsPageState
     IconData statusIcon;
 
     if (granted == null) {
-      statusColor = Colors.white38;
+      statusColor = ClayColors.textMuted;
       statusText = 'Checking…';
       statusIcon = Icons.hourglass_empty_rounded;
     } else if (granted) {
-      statusColor = const Color(0xFF4CAF50);
+      statusColor = ClayColors.greenAccent;
       statusText = 'Granted';
       statusIcon = Icons.check_circle_rounded;
     } else {
-      statusColor = const Color(0xFFE53935);
+      statusColor = ClayColors.redAccent;
       statusText = isPermanent ? 'Permanently Denied' : 'Denied';
       statusIcon = Icons.cancel_rounded;
     }
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: granted == true
-              ? const Color(0xFF4CAF50).withOpacity(0.3)
-              : granted == false
-                  ? const Color(0xFFE53935).withOpacity(0.3)
-                  : Colors.white12,
-          width: 1,
-        ),
-      ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        leading: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: _gold.withOpacity(0.12),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(icon, color: _gold, size: 22),
-        ),
-        title: Text(
-          label,
-          style: GoogleFonts.outfit(
-            color: Colors.white,
-            fontWeight: FontWeight.w600,
-            fontSize: 15,
-          ),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    final Color cardBorderColor = granted == true
+        ? ClayColors.greenAccent.withOpacity(0.2)
+        : granted == false
+            ? ClayColors.redAccent.withOpacity(0.2)
+            : Colors.black.withOpacity(0.03);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14.0),
+      child: ClayContainer(
+        borderRadius: 20,
+        depth: 4.0,
+        baseColor: ClayColors.warmGrey,
+        highlightColor: ClayColors.highlight,
+        shadowColor: ClayColors.shadow,
+        border: Border.all(color: cardBorderColor, width: 1.2),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
           children: [
-            const SizedBox(height: 2),
-            Text(
-              description,
-              style: GoogleFonts.outfit(
-                color: Colors.white54,
-                fontSize: 12,
+            // Icon leading in sunken card
+            ClayContainer(
+              width: 44,
+              height: 44,
+              borderRadius: 12,
+              isInset: true,
+              depth: 3.0,
+              baseColor: const Color(0xFFE5E2DA),
+              highlightColor: const Color(0xFFF7F4EF),
+              shadowColor: const Color(0xFFCBC7BE),
+              child: Center(
+                child: Icon(icon, color: ClayColors.goldAccent, size: 20),
               ),
             ),
-            const SizedBox(height: 6),
-            Row(children: [
-              Icon(statusIcon, color: statusColor, size: 14),
-              const SizedBox(width: 6),
-              Text(
-                statusText,
-                style: GoogleFonts.outfit(
-                  color: statusColor,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
+            const SizedBox(width: 14),
+
+            // Text Info
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: GoogleFonts.outfit(
+                      color: ClayColors.textDark,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    description,
+                    style: GoogleFonts.outfit(
+                      color: ClayColors.textMuted,
+                      fontSize: 12,
+                      height: 1.35,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Icon(statusIcon, color: statusColor, size: 14),
+                      const SizedBox(width: 6),
+                      Text(
+                        statusText,
+                        style: GoogleFonts.outfit(
+                          color: statusColor,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+
+            // Action Button Trailing
+            if (granted != true)
+              ClayButton(
+                onTap: () => _handlePermissionTap(permission),
+                borderRadius: 10,
+                depth: 3.0,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                baseColor: ClayColors.goldHighlight,
+                highlightColor: const Color(0xFFFFF7F5),
+                shadowColor: ClayColors.goldShadow,
+                child: Text(
+                  isPermanent ? 'Settings' : 'Allow',
+                  style: GoogleFonts.outfit(
+                    color: ClayColors.goldAccent,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
-            ]),
           ],
         ),
-        trailing: granted == true
-            ? null
-            : TextButton(
-                style: TextButton.styleFrom(
-                  backgroundColor: _gold.withOpacity(0.15),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                ),
-                onPressed: () => _handlePermissionTap(permission),
-                child: Text(
-                  isPermanent ? 'Open Settings' : 'Allow',
-                  style: GoogleFonts.outfit(
-                    color: _gold,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
       ),
     );
   }
@@ -250,26 +262,28 @@ class _VoiceAssistantSettingsPageState
     required IconData icon,
   }) {
     final selected = _gestureMode == value;
-    return GestureDetector(
-      onTap: () => _saveGestureMode(value),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        margin: const EdgeInsets.only(bottom: 10),
+
+    final Color base = selected ? ClayColors.goldHighlight : ClayColors.warmGrey;
+    final Color highlight = selected ? const Color(0xFFFFF7F5) : ClayColors.highlight;
+    final Color shadow = selected ? ClayColors.goldShadow : ClayColors.shadow;
+    final Color accent = selected ? ClayColors.goldAccent : ClayColors.textMuted;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12.0),
+      child: ClayButton(
+        onTap: () => _saveGestureMode(value),
+        borderRadius: 18,
+        depth: selected ? 3.0 : 5.0,
+        baseColor: base,
+        highlightColor: highlight,
+        shadowColor: shadow,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        decoration: BoxDecoration(
-          color: selected ? _gold.withOpacity(0.12) : _cardBg,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: selected ? _gold : Colors.white12,
-            width: selected ? 1.5 : 1,
-          ),
-        ),
         child: Row(
           children: [
             Icon(
               icon,
-              color: selected ? _gold : Colors.white54,
-              size: 24,
+              color: accent,
+              size: 22,
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -279,23 +293,28 @@ class _VoiceAssistantSettingsPageState
                   Text(
                     label,
                     style: GoogleFonts.outfit(
-                      color: selected ? _gold : Colors.white,
-                      fontWeight: FontWeight.w600,
+                      color: selected ? ClayColors.goldAccent : ClayColors.textDark,
+                      fontWeight: FontWeight.bold,
                       fontSize: 15,
                     ),
                   ),
+                  const SizedBox(height: 2),
                   Text(
                     subtitle,
                     style: GoogleFonts.outfit(
-                      color: Colors.white54,
+                      color: ClayColors.textMuted,
                       fontSize: 12,
+                      height: 1.3,
                     ),
                   ),
                 ],
               ),
             ),
+            const SizedBox(width: 10),
             if (selected)
-              const Icon(Icons.check_circle_rounded, color: _gold, size: 20),
+              const Icon(Icons.check_circle_rounded, color: ClayColors.goldAccent, size: 20)
+            else
+              Icon(Icons.circle_outlined, color: Colors.black.withOpacity(0.12), size: 20),
           ],
         ),
       ),
@@ -305,32 +324,33 @@ class _VoiceAssistantSettingsPageState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _bg,
+      backgroundColor: ClayColors.obsidianBg,
       appBar: AppBar(
-        backgroundColor: _bg,
+        backgroundColor: Colors.transparent,
         elevation: 0,
+        iconTheme: const IconThemeData(color: ClayColors.textDark),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_rounded, color: Colors.white),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: ClayColors.textDark, size: 20),
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
           'Voice Assistant Settings',
           style: GoogleFonts.outfit(
-            color: Colors.white,
-            fontWeight: FontWeight.w700,
+            color: ClayColors.textDark,
+            fontWeight: FontWeight.bold,
             fontSize: 18,
           ),
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: _gold),
+            icon: const Icon(Icons.refresh_rounded, color: ClayColors.goldAccent, size: 22),
             tooltip: 'Refresh permissions',
             onPressed: _refreshPermissions,
           ),
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 36),
         children: [
           // ── Permissions Section ──────────────────────────────────────────
           _sectionHeader('Required Permissions', Icons.security_rounded),
@@ -393,10 +413,10 @@ class _VoiceAssistantSettingsPageState
           _sectionHeader('Activation Gesture', Icons.touch_app_rounded),
           const SizedBox(height: 4),
           Padding(
-            padding: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.only(bottom: 12, left: 2),
             child: Text(
               'Choose how to wake up AURA when the app is in the background',
-              style: GoogleFonts.outfit(color: Colors.white54, fontSize: 13),
+              style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 13, height: 1.35),
             ),
           ),
 
@@ -428,42 +448,47 @@ class _VoiceAssistantSettingsPageState
   }
 
   Widget _sectionHeader(String title, IconData icon) {
-    return Row(
-      children: [
-        Icon(icon, color: _gold, size: 18),
-        const SizedBox(width: 8),
-        Text(
-          title,
-          style: GoogleFonts.outfit(
-            color: _gold,
-            fontWeight: FontWeight.w700,
-            fontSize: 15,
-            letterSpacing: 0.4,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Row(
+        children: [
+          Icon(icon, color: ClayColors.goldAccent, size: 18),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: GoogleFonts.outfit(
+              color: ClayColors.goldAccent,
+              fontWeight: FontWeight.w800,
+              fontSize: 14,
+              letterSpacing: 0.6,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
   Widget _oneplusNote() {
-    return Container(
+    return ClayContainer(
+      borderRadius: 16,
+      depth: 3.0,
+      baseColor: ClayColors.warmGrey,
+      highlightColor: ClayColors.highlight,
+      shadowColor: ClayColors.shadow,
+      border: Border.all(color: ClayColors.blueAccent.withOpacity(0.15), width: 1.0),
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.blue.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.blue.withOpacity(0.2)),
-      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.info_outline_rounded, color: Colors.blueAccent, size: 18),
+          const Icon(Icons.info_outline_rounded, color: ClayColors.blueAccent, size: 18),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               'OnePlus tip: If double power button doesn\'t work, go to Settings → Buttons & Gestures → Quick Launch and disable the Camera shortcut.',
               style: GoogleFonts.outfit(
-                color: Colors.white60,
+                color: ClayColors.textMuted,
                 fontSize: 12,
+                height: 1.45,
               ),
             ),
           ),

@@ -108,7 +108,7 @@ class LLMIntentClassifier {
 
   /// Fast check for common greetings that never need classification.
   bool _isGreeting(String text) {
-    const greetings = {'hi', 'hey', 'hello', 'yo', 'sup', 'thanks', 'thank you', 'ok', 'okay', 'bye', 'good', 'gm', 'gn'};
+    const greetings = {'hi', 'hey', 'hello', 'hai', 'hy', 'hii', 'heyy', 'yo', 'sup', 'thanks', 'thank you', 'ok', 'okay', 'bye', 'good', 'gm', 'gn', 'namaste'};
     return greetings.contains(text) || text.startsWith('hi ') || text.startsWith('hey ') || text.startsWith('hello ');
   }
 

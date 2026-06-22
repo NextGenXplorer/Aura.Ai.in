@@ -73,7 +73,9 @@ dependencies:
   google_mlkit_text_recognition: ^0.14.0
   image_picker: ^1.1.2
   markdown: ^7.3.0
+  pdf: ^3.11.1
   flutter_widget_from_html_core: any
+  flutter_gemma: ^0.12.6
 
 dev_dependencies:
   flutter_test:

@@ -167,6 +167,18 @@ class AuraNotificationListenerService : NotificationListenerService() {
             }
         }
 
+        try {
+            val intent = android.content.Intent("com.aura.mobile.assistant.NOTIFICATION_POSTED").apply {
+                putExtra("packageName", packageName)
+                putExtra("appName", appName)
+                putExtra("title", title ?: "")
+                putExtra("text", displayText ?: "")
+            }
+            sendBroadcast(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send notification broadcast: ${e.message}")
+        }
+
         Log.d(TAG, "Captured: [$appName] $title — ${displayText?.take(60)}")
     }
 

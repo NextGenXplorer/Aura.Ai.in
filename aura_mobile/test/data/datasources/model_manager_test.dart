@@ -199,6 +199,78 @@ void main() {
     });
   });
 
+  group('ModelManager - LiteRT format validation', () {
+    // Helper: create a file of the model's expected size with the given header
+    // bytes at the start, without allocating the whole buffer in memory.
+    Future<File> createSizedFile(String modelId, List<int> header) async {
+      final path = await modelManager.getModelPath(modelId);
+      final model = modelManager.getModelById(modelId)!;
+      final file = File(path);
+      await file.create(recursive: true);
+      final raf = await file.open(mode: FileMode.write);
+      await raf.writeFrom(header);
+      // Extend the file to the expected size so the size check passes.
+      await raf.setPosition(model.sizeBytes - 1);
+      await raf.writeByte(0);
+      await raf.close();
+      return file;
+    }
+
+    test('accepts valid .task container (ZIP local-file-header)', () async {
+      // gemma3-1b is the smallest .task LiteRT model.
+      final file = await createSizedFile('gemma3-1b', [0x50, 0x4B, 0x03, 0x04]);
+
+      final isDownloaded = await modelManager.isModelDownloaded('gemma3-1b');
+      expect(isDownloaded, true);
+
+      await file.delete();
+    });
+
+    test('rejects .task container with invalid header', () async {
+      final file = await createSizedFile('gemma3-1b', [0x00, 0x00, 0x00, 0x00]);
+
+      final isDownloaded = await modelManager.isModelDownloaded('gemma3-1b');
+      expect(isDownloaded, false);
+
+      await file.delete();
+    });
+
+    test('treats a too-small .task file as not downloaded (size gate)', () async {
+      final path = await modelManager.getModelPath('gemma3-1b');
+      final file = File(path);
+      await file.create(recursive: true);
+      await file.writeAsBytes([0x50, 0x4B, 0x03, 0x04]); // valid header, tiny
+
+      expect(await modelManager.isModelDownloaded('gemma3-1b'), false);
+
+      await file.delete();
+    });
+
+    test('treats a too-small .litertlm file as not downloaded (size gate)', () async {
+      // gemma4-e2b is a .litertlm model; a tiny file fails the size check.
+      final path = await modelManager.getModelPath('gemma4-e2b');
+      final file = File(path);
+      await file.create(recursive: true);
+      await file.writeAsBytes([0x4C, 0x49, 0x54, 0x45, 0x52, 0x54, 0x4C, 0x4D]);
+
+      expect(await modelManager.isModelDownloaded('gemma4-e2b'), false);
+
+      await file.delete();
+    });
+
+    test('verifyAndCleanupModel deletes a corrupt LiteRT file', () async {
+      // Too-small file fails the size check and is treated as corrupt.
+      final path = await modelManager.getModelPath('gemma3-1b');
+      final file = File(path);
+      await file.create(recursive: true);
+      await file.writeAsBytes([0x50, 0x4B, 0x03, 0x04]); // valid header, tiny size
+
+      final result = await modelManager.verifyAndCleanupModel('gemma3-1b');
+      expect(result, false);
+      expect(await file.exists(), false);
+    });
+  });
+
   group('ModelManager - Model deletion', () {
     test('deleteModel should remove existing model file', () async {
       final path = await modelManager.getModelPath('qwen2.5-0.5b');

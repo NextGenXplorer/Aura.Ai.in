@@ -5,6 +5,7 @@ import 'package:aura_mobile/domain/entities/flashcard.dart';
 import 'package:aura_mobile/presentation/providers/study_provider.dart';
 import 'package:aura_mobile/presentation/pages/deck_view_screen.dart';
 import 'package:aura_mobile/domain/services/revision_scheduler_service.dart';
+import 'package:aura_mobile/presentation/widgets/clay_components.dart';
 
 class StudyDashboardScreen extends ConsumerStatefulWidget {
   const StudyDashboardScreen({super.key});
@@ -25,40 +26,41 @@ class _StudyDashboardScreenState extends ConsumerState<StudyDashboardScreen> {
     final state = ref.watch(studyProvider);
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0a0a0c),
+      backgroundColor: ClayColors.obsidianBg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0a0a0c),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         title: Text(
           'Study Buddy',
           style: GoogleFonts.outfit(
             fontWeight: FontWeight.bold,
-            color: const Color(0xFFc69c3a),
+            color: ClayColors.goldAccent,
           ),
         ),
-        iconTheme: const IconThemeData(color: Colors.white),
+        iconTheme: const IconThemeData(color: ClayColors.textDark),
       ),
       body: state.isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFFc69c3a)))
+          ? const Center(child: CircularProgressIndicator(color: ClayColors.goldAccent))
           : RefreshIndicator(
               onRefresh: () => ref.read(studyProvider.notifier).loadDashboard(),
-              color: const Color(0xFFc69c3a),
+              color: ClayColors.goldAccent,
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
                   // ── Upcoming Exams ──
                   if (state.upcomingExams.isNotEmpty) ...[
                     _sectionTitle('Upcoming Exams'),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 12),
                     ...state.upcomingExams.take(3).map((exam) {
                       final intensity = RevisionSchedulerService.getStudyIntensity(exam.daysRemaining);
                       return _examCard(exam.name, exam.daysRemaining, intensity.label, exam.id);
                     }),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 28),
                   ],
 
                   // ── Your Decks ──
                   _sectionTitle('Your Decks'),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 12),
                   if (state.decks.isEmpty)
                     _emptyState(
                       'No study decks yet',
@@ -67,15 +69,29 @@ class _StudyDashboardScreenState extends ConsumerState<StudyDashboardScreen> {
                   else
                     ...state.decks.map((deck) => _deckCard(deck)),
 
-                  const SizedBox(height: 80),
+                  const SizedBox(height: 100),
                 ],
               ),
             ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _showCreateDeckDialog(),
-        backgroundColor: const Color(0xFFc69c3a),
-        icon: const Icon(Icons.add, color: Colors.black),
-        label: Text('New Deck', style: GoogleFonts.outfit(color: Colors.black, fontWeight: FontWeight.bold)),
+      floatingActionButton: ClayButton(
+        onTap: () => _showCreateDeckDialog(),
+        borderRadius: 28,
+        depth: 6.0,
+        baseColor: ClayColors.goldAccent,
+        highlightColor: ClayColors.goldHighlight,
+        shadowColor: ClayColors.goldShadow,
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.add, color: ClayColors.goldHighlight, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              'New Deck', 
+              style: GoogleFonts.outfit(color: ClayColors.goldHighlight, fontWeight: FontWeight.bold, fontSize: 14),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -86,124 +102,133 @@ class _StudyDashboardScreenState extends ConsumerState<StudyDashboardScreen> {
       style: GoogleFonts.outfit(
         fontSize: 20,
         fontWeight: FontWeight.bold,
-        color: Colors.white,
+        color: ClayColors.textDark,
       ),
     );
   }
 
   Widget _examCard(String name, int daysRemaining, String intensity, String examId) {
     final Color urgencyColor;
+    final Color urgencyHighlight;
+    final Color urgencyShadow;
     if (daysRemaining <= 3) {
-      urgencyColor = Colors.redAccent;
+      urgencyColor = ClayColors.redAccent;
+      urgencyHighlight = ClayColors.redHighlight;
+      urgencyShadow = ClayColors.redShadow;
     } else if (daysRemaining <= 7) {
-      urgencyColor = Colors.orangeAccent;
+      urgencyColor = ClayColors.orangeAccent;
+      urgencyHighlight = ClayColors.orangeHighlight;
+      urgencyShadow = ClayColors.orangeShadow;
     } else {
-      urgencyColor = const Color(0xFFc69c3a);
+      urgencyColor = ClayColors.goldAccent;
+      urgencyHighlight = ClayColors.goldHighlight;
+      urgencyShadow = ClayColors.goldShadow;
     }
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1a1a20),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: urgencyColor.withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 56,
-            height: 56,
-            decoration: BoxDecoration(
-              color: urgencyColor.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  '$daysRemaining',
-                  style: GoogleFonts.outfit(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: urgencyColor,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12.0),
+      child: ClayContainer(
+        borderRadius: 22,
+        depth: 6.0,
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            ClayContainer(
+              width: 56,
+              height: 56,
+              borderRadius: 16,
+              depth: 3.0,
+              baseColor: urgencyColor.withOpacity(0.15),
+              highlightColor: urgencyHighlight,
+              shadowColor: urgencyShadow,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    '$daysRemaining',
+                    style: GoogleFonts.outfit(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: urgencyColor,
+                    ),
                   ),
-                ),
-                Text(
-                  'days',
-                  style: GoogleFonts.outfit(fontSize: 10, color: urgencyColor),
-                ),
-              ],
+                  Text(
+                    'days',
+                    style: GoogleFonts.outfit(fontSize: 10, color: urgencyColor, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name, style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 4),
-                Text(intensity, style: GoogleFonts.outfit(color: urgencyColor, fontSize: 12)),
-              ],
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(name, style: GoogleFonts.outfit(color: ClayColors.textDark, fontWeight: FontWeight.bold, fontSize: 15)),
+                  const SizedBox(height: 4),
+                  Text(intensity, style: GoogleFonts.outfit(color: urgencyColor, fontSize: 12, fontWeight: FontWeight.w600)),
+                ],
+              ),
             ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline, color: Colors.white30, size: 20),
-            onPressed: () => ref.read(studyProvider.notifier).deleteExam(examId),
-          ),
-        ],
+            IconButton(
+              icon: const Icon(Icons.delete_outline_rounded, color: ClayColors.textHint, size: 20),
+              onPressed: () => ref.read(studyProvider.notifier).deleteExam(examId),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _deckCard(FlashcardDeck deck) {
-    return GestureDetector(
-      onTap: () {
-        ref.read(studyProvider.notifier).selectDeck(deck);
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => DeckViewScreen(deck: deck)),
-        );
-      },
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1a1a20),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white10),
-        ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12.0),
+      child: ClayButton(
+        onTap: () {
+          ref.read(studyProvider.notifier).selectDeck(deck);
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => DeckViewScreen(deck: deck)),
+          );
+        },
+        borderRadius: 22,
+        padding: const EdgeInsets.all(18),
+        baseColor: ClayColors.warmGrey,
+        highlightColor: ClayColors.highlight,
+        shadowColor: ClayColors.shadow,
+        depth: 6.0,
         child: Row(
           children: [
-            Container(
+            ClayContainer(
               width: 48,
               height: 48,
-              decoration: BoxDecoration(
-                color: const Color(0xFFc69c3a).withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(Icons.style, color: Color(0xFFc69c3a)),
+              borderRadius: 14,
+              depth: 3.0,
+              baseColor: ClayColors.goldAccent.withOpacity(0.15),
+              highlightColor: ClayColors.highlight,
+              shadowColor: ClayColors.shadow,
+              child: const Icon(Icons.style_outlined, color: ClayColors.goldAccent),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 16),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     deck.name,
-                    style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.w600),
+                    style: GoogleFonts.outfit(color: ClayColors.textDark, fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     deck.description ?? 'No description',
-                    style: GoogleFonts.outfit(color: Colors.white38, fontSize: 12),
+                    style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 12),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: Colors.white30),
+            const Icon(Icons.chevron_right_rounded, color: ClayColors.textHint),
           ],
         ),
       ),
@@ -211,20 +236,16 @@ class _StudyDashboardScreenState extends ConsumerState<StudyDashboardScreen> {
   }
 
   Widget _emptyState(String title, String subtitle) {
-    return Container(
-      padding: const EdgeInsets.all(32),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1a1a20),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white10),
-      ),
+    return ClayContainer(
+      borderRadius: 24,
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
       child: Column(
         children: [
-          const Icon(Icons.school_outlined, color: Color(0xFFc69c3a), size: 48),
-          const SizedBox(height: 16),
-          Text(title, style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+          const Icon(Icons.school_outlined, color: ClayColors.goldAccent, size: 48),
+          const SizedBox(height: 20),
+          Text(title, style: GoogleFonts.outfit(color: ClayColors.textDark, fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
-          Text(subtitle, style: GoogleFonts.outfit(color: Colors.white38, fontSize: 13), textAlign: TextAlign.center),
+          Text(subtitle, style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 13), textAlign: TextAlign.center),
         ],
       ),
     );
@@ -234,43 +255,43 @@ class _StudyDashboardScreenState extends ConsumerState<StudyDashboardScreen> {
     final nameController = TextEditingController();
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1a1a20),
-        title: Text('Create Study Deck', style: GoogleFonts.outfit(color: Colors.white)),
+      builder: (ctx) => ClayDialog(
+        title: 'Create Study Deck',
         content: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            TextField(
+            ClayTextField(
               controller: nameController,
-              style: GoogleFonts.outfit(color: Colors.white),
-              decoration: InputDecoration(
-                hintText: 'Deck name (e.g., Biology Ch. 5)',
-                hintStyle: GoogleFonts.outfit(color: Colors.white30),
-                enabledBorder: const OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                focusedBorder: const OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFc69c3a))),
-              ),
+              hintText: 'Deck name (e.g., Biology Ch. 5)',
+              prefixIcon: Icons.folder_open_rounded,
             ),
             const SizedBox(height: 16),
             Text(
               'You can also say "create flashcards from PDF" in chat to auto-generate cards.',
-              style: GoogleFonts.outfit(color: Colors.white38, fontSize: 12),
+              style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 12, height: 1.4),
             ),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: Text('Cancel', style: GoogleFonts.outfit(color: Colors.white54)),
+            child: Text('Cancel', style: GoogleFonts.outfit(color: ClayColors.textMuted, fontWeight: FontWeight.w600)),
           ),
-          ElevatedButton(
-            onPressed: () async {
+          const SizedBox(width: 8),
+          ClayButton(
+            onTap: () async {
               if (nameController.text.trim().isNotEmpty) {
                 Navigator.pop(ctx);
                 await ref.read(studyProvider.notifier).createEmptyDeck(nameController.text.trim());
               }
             },
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFc69c3a)),
-            child: Text('Create', style: GoogleFonts.outfit(color: Colors.black, fontWeight: FontWeight.bold)),
+            borderRadius: 14,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            baseColor: ClayColors.goldAccent,
+            highlightColor: ClayColors.goldHighlight,
+            shadowColor: ClayColors.goldShadow,
+            child: Text('Create', style: GoogleFonts.outfit(color: ClayColors.goldHighlight, fontWeight: FontWeight.bold)),
           ),
         ],
       ),

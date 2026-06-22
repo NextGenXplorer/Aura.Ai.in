@@ -17,6 +17,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -67,23 +68,28 @@ class OverlayManager(private val context: Context) {
         handler.post {
             if (overlayView == null) return@post
             val statusText: TextView? = overlayView!!.findViewWithTag("status_text")
-            val orbView: View? = overlayView!!.findViewWithTag("orb_view")
+            val orbContainer: FrameLayout? = overlayView!!.findViewWithTag("orb_container")
+            val centerButton: FrameLayout? = orbContainer?.findViewWithTag("center_button")
+            val centerIcon: ImageView? = centerButton?.getChildAt(0) as? ImageView
 
             when (state) {
                 "LISTENING" -> {
                     statusText?.text = "Hi there, I'm listening..."
                     showOverlayPanel()
-                    startPulseAnimation(orbView)
+                    startPulseAnimation(null)
+                    centerIcon?.setImageResource(android.R.drawable.ic_btn_speak_now)
                 }
                 "PROCESSING" -> {
                     statusText?.text = "Thinking about that..."
                     showOverlayPanel()
-                    startSpinAnimation(orbView)
+                    startSpinAnimation(null)
+                    centerIcon?.setImageResource(android.R.drawable.presence_audio_online)
                 }
                 "SPEAKING" -> {
                     statusText?.text = "Here's what I found..."
                     showOverlayPanel()
-                    startPulseAnimation(orbView)
+                    startPulseAnimation(null)
+                    centerIcon?.setImageResource(android.R.drawable.presence_audio_online)
                 }
                 "IDLE" -> {
                     hideOverlay()
@@ -106,7 +112,7 @@ class OverlayManager(private val context: Context) {
             
             // Immediately let touches pass through to the app underneath
             setTouchable(false)
-
+ 
             // Animate out before removing
             val panel: View? = overlayView?.findViewWithTag("panel")
             val dimBg: View? = overlayView?.findViewWithTag("dim_bg")
@@ -162,21 +168,27 @@ class OverlayManager(private val context: Context) {
             }
             bubbleParams = params
 
-            // Build the bubble view
-            val bubble = FrameLayout(context)
+            // Build the bubble view with 3D shadow and terracotta fill
+            val bubble = FrameLayout(context).apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    elevation = dpToPx(8).toFloat()
+                }
+            }
             val bg = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                colors = intArrayOf(Color.parseColor("#2b5876"), Color.parseColor("#4e4376")) // sleek purple/blue gradient
-                setStroke(dpToPx(2), Color.argb(80, 255, 255, 255))
+                setColor(Color.parseColor("#BC4B2E")) // Terracotta accent color
+                setStroke(dpToPx(2), Color.parseColor("#FFF0EC")) // Soft rose outline
             }
             bubble.background = bg
 
-            val micLabel = TextView(context).apply {
-                text = "🎤"
-                textSize = 22f
-                gravity = Gravity.CENTER
+            // Crisp white mic icon instead of raw emoji
+            val micIcon = ImageView(context).apply {
+                setImageResource(android.R.drawable.ic_btn_speak_now)
+                setColorFilter(Color.WHITE)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                setPadding(dpToPx(13), dpToPx(13), dpToPx(13), dpToPx(13))
             }
-            bubble.addView(micLabel, FrameLayout.LayoutParams(
+            bubble.addView(micIcon, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
             ))
@@ -281,7 +293,7 @@ class OverlayManager(private val context: Context) {
 
         // Full-screen dim overlay
         val dimBackground = View(context)
-        dimBackground.setBackgroundColor(Color.argb(100, 0, 0, 0))
+        dimBackground.setBackgroundColor(Color.argb(90, 0, 0, 0))
         dimBackground.alpha = 0f
         dimBackground.tag = "dim_bg"
         dimBackground.setOnClickListener {
@@ -296,7 +308,7 @@ class OverlayManager(private val context: Context) {
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
 
-        // Sliding panel
+        // Sliding panel container
         val panelLayout = FrameLayout(context)
         panelLayout.tag = "panel"
         panelLayout.translationY = dpToPx(320).toFloat()
@@ -304,26 +316,29 @@ class OverlayManager(private val context: Context) {
         val innerPanel = FrameLayout(context)
         innerPanel.tag = "inner_panel"
         
-        // Modern rounded top background
+        // Modern rounded top background matching warm-paper cream
         val panelBg = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            setColor(Color.parseColor("#1E1E24")) // sleek dark background
+            setColor(Color.parseColor("#F7F4EF")) // Warm paper background (ClayColors.obsidianBg)
             cornerRadii = floatArrayOf(
                 dpToPx(24).toFloat(), dpToPx(24).toFloat(), // top left
                 dpToPx(24).toFloat(), dpToPx(24).toFloat(), // top right
                 0f, 0f, // bottom right
                 0f, 0f  // bottom left
             )
+            setStroke(dpToPx(2), Color.parseColor("#EAD5D0")) // subtle warm top border
         }
         innerPanel.background = panelBg
-        innerPanel.elevation = dpToPx(16).toFloat()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            innerPanel.elevation = dpToPx(16).toFloat()
+        }
         
         // Sleek Drag Handle Indicator
         val dragHandle = View(context).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dpToPx(4).toFloat()
-                setColor(Color.parseColor("#50505A"))
+                setColor(Color.parseColor("#C8C2B4")) // warm sepia-grey drag handle
             }
         }
         val handleParams = FrameLayout.LayoutParams(dpToPx(36), dpToPx(4)).apply {
@@ -334,8 +349,8 @@ class OverlayManager(private val context: Context) {
 
         val statusTextView = TextView(context)
         statusTextView.text = "Hi there, I'm listening..."
-        statusTextView.setTextColor(Color.parseColor("#E0E0E0"))
-        statusTextView.textSize = 24f
+        statusTextView.setTextColor(Color.parseColor("#191816")) // deep warm ink text
+        statusTextView.textSize = 22f
         statusTextView.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
         statusTextView.gravity = Gravity.CENTER
         statusTextView.tag = "status_text"
@@ -347,21 +362,72 @@ class OverlayManager(private val context: Context) {
         statusParams.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
         innerPanel.addView(statusTextView, statusParams)
 
-        // Orb
-        val orbSize = dpToPx(100)
-        val orbView = View(context)
-        orbView.tag = "orb_view"
-        orbView.background = createOrbDrawable()
+        // Orb Container
+        val orbContainer = FrameLayout(context).apply {
+            tag = "orb_container"
+        }
         val orbContainerParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             dpToPx(200)
-        )
-        orbContainerParams.gravity = Gravity.CENTER
-        val orbContainer = FrameLayout(context)
-        orbContainer.tag = "orb_container"
-        val orbParams = FrameLayout.LayoutParams(orbSize, orbSize)
-        orbParams.gravity = Gravity.CENTER
-        orbContainer.addView(orbView, orbParams)
+        ).apply {
+            gravity = Gravity.CENTER
+        }
+
+        // Orb 1 (Sky Blue / Purple)
+        val orb3 = View(context).apply {
+            tag = "orb3"
+            background = createGradientOrb("#54C5F8", "#7E6BCE", 60)
+            alpha = 0.8f
+        }
+        val p3 = FrameLayout.LayoutParams(dpToPx(120), dpToPx(120)).apply { gravity = Gravity.CENTER }
+
+        // Orb 2 (Terracotta Core)
+        val orb1 = View(context).apply {
+            tag = "orb1"
+            background = createGradientOrb("#E25F4E", "#BC4B2E", 55)
+            alpha = 0.85f
+        }
+        val p1 = FrameLayout.LayoutParams(dpToPx(110), dpToPx(110)).apply { gravity = Gravity.CENTER }
+
+        // Orb 3 (Amber / Gold)
+        val orb2 = View(context).apply {
+            tag = "orb2"
+            background = createGradientOrb("#FFF0EC", "#D1A153", 50)
+            alpha = 0.8f
+        }
+        val p2 = FrameLayout.LayoutParams(dpToPx(95), dpToPx(95)).apply { gravity = Gravity.CENTER }
+
+        orbContainer.addView(orb3, p3)
+        orbContainer.addView(orb1, p1)
+        orbContainer.addView(orb2, p2)
+
+        // Central white button containing terracotta mic icon
+        val centerButtonSize = dpToPx(52)
+        val centerButton = FrameLayout(context).apply {
+            tag = "center_button"
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.WHITE)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                elevation = dpToPx(4).toFloat()
+            }
+        }
+        val centerIcon = ImageView(context).apply {
+            setImageResource(android.R.drawable.ic_btn_speak_now)
+            setColorFilter(Color.parseColor("#BC4B2E"))
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dpToPx(12), dpToPx(12), dpToPx(12), dpToPx(12))
+        }
+        centerButton.addView(centerIcon, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+        
+        val centerBtnParams = FrameLayout.LayoutParams(centerButtonSize, centerButtonSize).apply {
+            gravity = Gravity.CENTER
+        }
+        orbContainer.addView(centerButton, centerBtnParams)
         innerPanel.addView(orbContainer, orbContainerParams)
 
         panelLayout.addView(innerPanel, FrameLayout.LayoutParams(
@@ -423,11 +489,11 @@ class OverlayManager(private val context: Context) {
             contacts.forEachIndexed { index, contact ->
                 val btn = TextView(context).apply {
                     text = "${index + 1}. ${contact.displayName}\n${contact.number}"
-                    setTextColor(Color.WHITE)
-                    textSize = 16f
+                    setTextColor(Color.parseColor("#191816")) // deep warm ink text
+                    textSize = 15f
                     typeface = Typeface.DEFAULT_BOLD
                     gravity = Gravity.CENTER
-                    setPadding(dpToPx(20), dpToPx(16), dpToPx(20), dpToPx(16))
+                    setPadding(dpToPx(20), dpToPx(14), dpToPx(20), dpToPx(14))
                     background = createContactButtonBackground()
                     setOnClickListener {
                         setTouchable(false)
@@ -474,9 +540,9 @@ class OverlayManager(private val context: Context) {
     private fun createContactButtonBackground(): GradientDrawable {
         return GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = dpToPx(16).toFloat()
-            setColor(Color.parseColor("#2A2A35")) // slightly lighter than bg
-            setStroke(dpToPx(1), Color.parseColor("#4facfe")) // subtle blue border
+            cornerRadius = dpToPx(14).toFloat()
+            setColor(Color.parseColor("#EFECE6")) // ClayColors.warmGrey base
+            setStroke(dpToPx(1), Color.parseColor("#BC4B2E")) // Terracotta outline border
         }
     }
 
@@ -520,62 +586,142 @@ class OverlayManager(private val context: Context) {
     }
 
     private fun startPulseAnimation(view: View?) {
-        view ?: return
+        val container = overlayView?.findViewWithTag<FrameLayout>("orb_container") ?: return
+        val orb1 = container.findViewWithTag<View>("orb1")
+        val orb2 = container.findViewWithTag<View>("orb2")
+        val orb3 = container.findViewWithTag<View>("orb3")
+
         stopAnimations()
 
-        val alphaAnim = ObjectAnimator.ofFloat(view, "alpha", 0.6f, 1.0f).apply {
-            duration = 1000
-            repeatCount = ObjectAnimator.INFINITE
-            repeatMode = ObjectAnimator.REVERSE
-            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+        if (orb1 != null && orb2 != null && orb3 != null) {
+            // Orb 1 (Terracotta): slow horizontal sway and gentle pulse
+            val tx1 = ObjectAnimator.ofFloat(orb1, "translationX", -dpToPx(16).toFloat(), dpToPx(12).toFloat()).apply {
+                duration = 2400
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.REVERSE
+                interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            }
+            val sx1 = ObjectAnimator.ofFloat(orb1, "scaleX", 0.95f, 1.2f).apply {
+                duration = 1800
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.REVERSE
+                interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            }
+            val sy1 = ObjectAnimator.ofFloat(orb1, "scaleY", 0.95f, 1.2f).apply {
+                duration = 1800
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.REVERSE
+                interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            }
+
+            // Orb 2 (Amber/Gold): slow vertical sway and opposite pulse
+            val ty2 = ObjectAnimator.ofFloat(orb2, "translationY", -dpToPx(12).toFloat(), dpToPx(16).toFloat()).apply {
+                duration = 2000
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.REVERSE
+                interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            }
+            val sx2 = ObjectAnimator.ofFloat(orb2, "scaleX", 1.15f, 0.85f).apply {
+                duration = 2200
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.REVERSE
+                interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            }
+            val sy2 = ObjectAnimator.ofFloat(orb2, "scaleY", 1.15f, 0.85f).apply {
+                duration = 2200
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.REVERSE
+                interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            }
+
+            // Orb 3 (Sky Blue / Purple): diagonal sway and moderate breathing pulse
+            val tx3 = ObjectAnimator.ofFloat(orb3, "translationX", dpToPx(14).toFloat(), -dpToPx(14).toFloat()).apply {
+                duration = 2700
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.REVERSE
+                interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            }
+            val ty3 = ObjectAnimator.ofFloat(orb3, "translationY", dpToPx(8).toFloat(), -dpToPx(12).toFloat()).apply {
+                duration = 2700
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.REVERSE
+                interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            }
+            val sx3 = ObjectAnimator.ofFloat(orb3, "scaleX", 0.88f, 1.16f).apply {
+                duration = 2500
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.REVERSE
+                interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            }
+            val sy3 = ObjectAnimator.ofFloat(orb3, "scaleY", 0.88f, 1.16f).apply {
+                duration = 2500
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.REVERSE
+                interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            }
+
+            activeAnimators.addAll(listOf(tx1, sx1, sy1, ty2, sx2, sy2, tx3, ty3, sx3, sy3))
+            activeAnimators.forEach { it.start() }
         }
-        val scaleXAnim = ObjectAnimator.ofFloat(view, "scaleX", 1.0f, 1.15f).apply {
-            duration = 1000
-            repeatCount = ObjectAnimator.INFINITE
-            repeatMode = ObjectAnimator.REVERSE
-            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
-        }
-        val scaleYAnim = ObjectAnimator.ofFloat(view, "scaleY", 1.0f, 1.15f).apply {
-            duration = 1000
-            repeatCount = ObjectAnimator.INFINITE
-            repeatMode = ObjectAnimator.REVERSE
-            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
-        }
-        activeAnimators.addAll(listOf(alphaAnim, scaleXAnim, scaleYAnim))
-        activeAnimators.forEach { it.start() }
     }
 
     private fun startSpinAnimation(view: View?) {
-        view ?: return
+        val container = overlayView?.findViewWithTag<FrameLayout>("orb_container") ?: return
+        val orb1 = container.findViewWithTag<View>("orb1")
+        val orb2 = container.findViewWithTag<View>("orb2")
+        val orb3 = container.findViewWithTag<View>("orb3")
+
         stopAnimations()
 
-        val spinAnim = ObjectAnimator.ofFloat(view, "rotation", 0f, 360f).apply {
-            duration = 1200
-            repeatCount = ObjectAnimator.INFINITE
-            repeatMode = ObjectAnimator.RESTART
+        if (orb1 != null && orb2 != null && orb3 != null) {
+            // Spin/swirl the orbs relative to each other during processing
+            val spin1 = ObjectAnimator.ofFloat(orb1, "rotation", 0f, 360f).apply {
+                duration = 1800
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.RESTART
+                interpolator = android.view.animation.LinearInterpolator()
+            }
+            val spin2 = ObjectAnimator.ofFloat(orb2, "rotation", 360f, 0f).apply {
+                duration = 1500
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.RESTART
+                interpolator = android.view.animation.LinearInterpolator()
+            }
+            val spin3 = ObjectAnimator.ofFloat(orb3, "rotation", 0f, 360f).apply {
+                duration = 2200
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.RESTART
+                interpolator = android.view.animation.LinearInterpolator()
+            }
+            activeAnimators.addAll(listOf(spin1, spin2, spin3))
+            activeAnimators.forEach { it.start() }
         }
-        activeAnimators.add(spinAnim)
-        spinAnim.start()
     }
 
     private fun stopAnimations() {
         activeAnimators.forEach { it.cancel() }
         activeAnimators.clear()
-        overlayView?.findViewWithTag<View>("orb_view")?.apply {
-            scaleX = 1f; scaleY = 1f; alpha = 1f; rotation = 0f
-        }
+        
+        val container = overlayView?.findViewWithTag<FrameLayout>("orb_container") ?: return
+        val orb1 = container.findViewWithTag<View>("orb1")
+        val orb2 = container.findViewWithTag<View>("orb2")
+        val orb3 = container.findViewWithTag<View>("orb3")
+        
+        orb1?.apply { scaleX = 1f; scaleY = 1f; translationX = 0f; translationY = 0f; rotation = 0f }
+        orb2?.apply { scaleX = 1f; scaleY = 1f; translationX = 0f; translationY = 0f; rotation = 0f }
+        orb3?.apply { scaleX = 1f; scaleY = 1f; translationX = 0f; translationY = 0f; rotation = 0f }
     }
 
-    private fun createOrbDrawable(): GradientDrawable {
+    private fun createGradientOrb(colorStart: String, colorEnd: String, radiusDp: Int): GradientDrawable {
         return GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             gradientType = GradientDrawable.RADIAL_GRADIENT
             colors = intArrayOf(
-                Color.parseColor("#4facfe"), // vibrant blue center
-                Color.parseColor("#00f2fe"), // cyan outer
+                Color.parseColor(colorStart),
+                Color.parseColor(colorEnd),
                 Color.TRANSPARENT
             )
-            setGradientRadius(dpToPx(60).toFloat()) // Slightly larger blur radius
+            setGradientRadius(dpToPx(radiusDp).toFloat())
         }
     }
 

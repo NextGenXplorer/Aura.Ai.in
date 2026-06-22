@@ -3,6 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:aura_mobile/features/orchestrator/orchestrator_service.dart';
+import 'package:aura_mobile/presentation/providers/clipboard_bubble_provider.dart';
+import 'package:aura_mobile/presentation/providers/chat_provider.dart';
+import 'package:aura_mobile/features/automation/application/automation_engine.dart';
 
 final clipboardAiServiceProvider = Provider((ref) {
   return ClipboardAiService(ref);
@@ -92,6 +95,19 @@ class ClipboardAiService {
     }
 
     debugPrint('CLIPBOARD_AI: Initialized (enabled=$_enabled)');
+
+    // Query for any pending PROCESS_TEXT intent from cold startup
+    try {
+      final pending = await _channel.invokeMethod<String>('getPendingProcessText');
+      if (pending != null && pending.isNotEmpty) {
+        debugPrint('CLIPBOARD_AI: Cold startup PROCESS_TEXT found: "$pending"');
+        Future.delayed(const Duration(milliseconds: 1000), () {
+          _ref.read(chatProvider.notifier).sendMessage(pending);
+        });
+      }
+    } catch (e) {
+      debugPrint('CLIPBOARD_AI: Failed to get pending process text: $e');
+    }
   }
 
   // ------------------------------------------------------------------
@@ -154,6 +170,29 @@ class ClipboardAiService {
           'CLIPBOARD_AI: Received content — type=${type.name}, '
           'text=${content.length > 80 ? '${content.substring(0, 80)}...' : content}',
         );
+
+        // Trigger the clipboard bubble overlay
+        try {
+          _ref.read(clipboardBubbleProvider.notifier).showBubble(_lastEvent!);
+        } catch (e) {
+          debugPrint('CLIPBOARD_AI: Failed to show bubble: $e');
+        }
+
+        try {
+          _ref.read(automationEngineProvider).checkAndTriggerClipboardFlows(content);
+        } catch (e) {
+          debugPrint('CLIPBOARD_AI: Failed to trigger automation: $e');
+        }
+        break;
+
+      case 'onProcessTextIntent':
+        final content = call.arguments as String? ?? '';
+        if (content.isEmpty) return;
+        debugPrint('CLIPBOARD_AI: Received PROCESS_TEXT intent: "$content"');
+
+        Future.delayed(const Duration(milliseconds: 600), () {
+          _ref.read(chatProvider.notifier).sendMessage(content);
+        });
         break;
 
       default:

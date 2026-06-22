@@ -51,6 +51,14 @@ class RunAnywhere {
   static const Duration _inferenceTimeout = Duration(seconds: 180); // 3 min for long code generation
   static const int _minFreeDiskSpaceMB = 100;
 
+  /// Context window (in tokens) the GGUF engine is initialized with. 4096 gives
+  /// the model a useful memory of the conversation, documents, and tool context
+  /// while keeping the KV-cache memory footprint reasonable on mobile. Qwen3
+  /// supports far larger windows, but 4096 balances capability vs. RAM on a
+  /// typical phone.
+  static const int _contextWindowTokens = 4096;
+  static const int _promptBatchTokens = 512;
+
   /// Whether a model is currently loaded and ready for inference.
   bool get isModelLoaded => _contextId != null;
 
@@ -288,6 +296,8 @@ class RunAnywhere {
       // 4. Load model with timeout
       final initFuture = Fllama.instance()?.initContext(
         modelPath,
+        nCtx: _contextWindowTokens,
+        nBatch: _promptBatchTokens,
         emitLoadProgress: true,
       ) ?? Future.value(null);
 
@@ -377,8 +387,8 @@ class RunAnywhere {
       // fllama only supports one inference at a time per context.
       if (_activeChatController != null && !_activeChatController!.isClosed) {
         await _activeChatController!.close();
-        // Give the native side a brief moment to release resources
-        await Future.delayed(const Duration(milliseconds: 100));
+        // Brief pause for native side to release — 50ms is enough on modern devices
+        await Future.delayed(const Duration(milliseconds: 50));
       }
 
       // Build prompt in ChatML format
@@ -463,9 +473,10 @@ class RunAnywhere {
           '<|endoftext|>',
           '\nHuman:',
           '\nUser:',
+          '\nAssistant:',
         ],
         temperature: temperature,
-        topP: temperature < 0.5 ? 0.8 : 0.9,
+        topP: temperature < 0.5 ? 0.75 : 0.85, // tighter nucleus = fewer hallucinations
         nPredict: maxTokens,
         emitRealtimeCompletion: true,
       );

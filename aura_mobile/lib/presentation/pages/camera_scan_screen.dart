@@ -5,8 +5,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:read_pdf_text/read_pdf_text.dart';
 import 'package:aura_mobile/core/services/ocr_service.dart';
 import 'package:aura_mobile/presentation/pages/scan_result_screen.dart';
+import 'package:aura_mobile/presentation/widgets/clay_components.dart';
 
 class CameraScanScreen extends ConsumerStatefulWidget {
   const CameraScanScreen({super.key});
@@ -118,21 +121,74 @@ class _CameraScanScreenState extends ConsumerState<CameraScanScreen> {
     }
   }
 
+  Future<void> _pickAndScanPdf() async {
+    try {
+      final FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf'],
+      );
+
+      if (result == null || result.files.isEmpty) return;
+      final String? filePath = result.files.single.path;
+      if (filePath == null) return;
+
+      setState(() {
+        _isProcessing = true;
+        _processingStatus = 'Extracting PDF text...';
+      });
+
+      final String extractedText = await ReadPdfText.getPDFtext(filePath);
+
+      setState(() => _isProcessing = false);
+
+      if (extractedText.trim().isEmpty) {
+        _showSnackBar('No readable text found in the PDF.');
+        return;
+      }
+
+      final ocrResult = OcrResult(
+        fullText: extractedText,
+        blocks: [],
+        imageWidth: 0,
+        imageHeight: 0,
+      );
+
+      final category = _ocrService.categorize(ocrResult);
+
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ScanResultScreen(
+            ocrResult: ocrResult,
+            category: category,
+            imagePath: filePath,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isProcessing = false);
+      _showSnackBar('Failed to parse PDF file. Please try another file.');
+      debugPrint('PDF scan error: $e');
+    }
+  }
+
   void _showPermissionDialog() {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1a1a20),
+        backgroundColor: ClayColors.warmGrey,
         title: Text('Camera Permission Required',
-            style: GoogleFonts.outfit(color: Colors.white)),
+            style: GoogleFonts.outfit(color: ClayColors.textDark, fontWeight: FontWeight.bold)),
         content: Text(
           'Camera permission was permanently denied. Please enable it in your device settings.',
-          style: GoogleFonts.outfit(color: Colors.white70),
+          style: GoogleFonts.outfit(color: ClayColors.textMuted),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: Text('Cancel', style: GoogleFonts.outfit(color: Colors.white38)),
+            child: Text('Cancel', style: GoogleFonts.outfit(color: ClayColors.textMuted)),
           ),
           TextButton(
             onPressed: () {
@@ -140,7 +196,7 @@ class _CameraScanScreenState extends ConsumerState<CameraScanScreen> {
               openAppSettings();
             },
             child: Text('Open Settings',
-                style: GoogleFonts.outfit(color: const Color(0xFFc69c3a))),
+                style: GoogleFonts.outfit(color: ClayColors.goldAccent)),
           ),
         ],
       ),
@@ -157,17 +213,17 @@ class _CameraScanScreenState extends ConsumerState<CameraScanScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0a0a0c),
+      backgroundColor: ClayColors.obsidianBg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0a0a0c),
+        backgroundColor: ClayColors.obsidianBg,
         title: Text(
           'Scan & Capture',
           style: GoogleFonts.outfit(
             fontWeight: FontWeight.bold,
-            color: const Color(0xFFc69c3a),
+            color: ClayColors.goldAccent,
           ),
         ),
-        iconTheme: const IconThemeData(color: Colors.white),
+        iconTheme: const IconThemeData(color: ClayColors.textDark),
       ),
       body: _isProcessing
           ? _processingView()
@@ -189,16 +245,16 @@ class _CameraScanScreenState extends ConsumerState<CameraScanScreen> {
                     width: 120,
                     height: 120,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFc69c3a).withValues(alpha: 0.1),
+                      color: ClayColors.goldAccent.withOpacity(0.1),
                       shape: BoxShape.circle,
                       border: Border.all(
-                        color: const Color(0xFFc69c3a).withValues(alpha: 0.3),
+                        color: ClayColors.goldAccent.withOpacity(0.3),
                         width: 2,
                       ),
                     ),
                     child: const Icon(
                       Icons.document_scanner_rounded,
-                      color: Color(0xFFc69c3a),
+                      color: ClayColors.goldAccent,
                       size: 56,
                     ),
                   ),
@@ -207,7 +263,7 @@ class _CameraScanScreenState extends ConsumerState<CameraScanScreen> {
                   Text(
                     'Smart Document Scanner',
                     style: GoogleFonts.outfit(
-                      color: Colors.white,
+                      color: ClayColors.textDark,
                       fontSize: 22,
                       fontWeight: FontWeight.bold,
                     ),
@@ -215,7 +271,7 @@ class _CameraScanScreenState extends ConsumerState<CameraScanScreen> {
                   const SizedBox(height: 12),
                   Text(
                     'Capture notes, textbooks, whiteboards, or screenshots.\nAURA will extract text and auto-create flashcards.',
-                    style: GoogleFonts.outfit(color: Colors.white38, fontSize: 14, height: 1.5),
+                    style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 14, height: 1.5),
                     textAlign: TextAlign.center,
                   ),
 
@@ -237,6 +293,14 @@ class _CameraScanScreenState extends ConsumerState<CameraScanScreen> {
                     color: Colors.blueAccent,
                     onTap: () => _scanImage(ImageSource.gallery),
                   ),
+                  const SizedBox(height: 12),
+                  _scanOption(
+                    icon: Icons.picture_as_pdf_rounded,
+                    title: 'Import PDF Document',
+                    subtitle: 'Extract text from textbooks or PDF files',
+                    color: Colors.redAccent,
+                    onTap: _pickAndScanPdf,
+                  ),
 
                   const SizedBox(height: 40),
 
@@ -244,14 +308,14 @@ class _CameraScanScreenState extends ConsumerState<CameraScanScreen> {
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1a1a20),
+                      color: const Color(0xFFE5E2DA),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white10),
+                      border: Border.all(color: const Color(0xFFCBC7BE)),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('What AURA can scan:', style: GoogleFonts.outfit(color: Colors.white54, fontSize: 12)),
+                        Text('What AURA can scan:', style: GoogleFonts.outfit(color: ClayColors.textDark, fontSize: 12)),
                         const SizedBox(height: 8),
                         _capabilityRow(Icons.edit_note, 'Handwritten notes'),
                         _capabilityRow(Icons.menu_book, 'Printed textbooks & PDFs'),
@@ -283,19 +347,19 @@ class _CameraScanScreenState extends ConsumerState<CameraScanScreen> {
             width: 60,
             height: 60,
             child: CircularProgressIndicator(
-              color: Color(0xFFc69c3a),
+              color: ClayColors.goldAccent,
               strokeWidth: 3,
             ),
           ),
           const SizedBox(height: 24),
           Text(
             _processingStatus,
-            style: GoogleFonts.outfit(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+            style: GoogleFonts.outfit(color: ClayColors.textDark, fontSize: 18, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 8),
           Text(
             'This may take a moment...',
-            style: GoogleFonts.outfit(color: Colors.white38, fontSize: 14),
+            style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 14),
           ),
         ],
       ),
@@ -334,9 +398,9 @@ class _CameraScanScreenState extends ConsumerState<CameraScanScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 16)),
+                  Text(title, style: GoogleFonts.outfit(color: ClayColors.textDark, fontWeight: FontWeight.w600, fontSize: 16)),
                   const SizedBox(height: 2),
-                  Text(subtitle, style: GoogleFonts.outfit(color: Colors.white38, fontSize: 12)),
+                  Text(subtitle, style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 12)),
                 ],
               ),
             ),
@@ -352,9 +416,9 @@ class _CameraScanScreenState extends ConsumerState<CameraScanScreen> {
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         children: [
-          Icon(icon, color: const Color(0xFFc69c3a), size: 16),
+          Icon(icon, color: ClayColors.goldAccent, size: 16),
           const SizedBox(width: 8),
-          Text(text, style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13)),
+          Text(text, style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 13)),
         ],
       ),
     );

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:aura_mobile/presentation/widgets/clay_components.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:aura_mobile/presentation/providers/chat_provider.dart';
@@ -16,19 +17,12 @@ class ChatInputBar extends ConsumerStatefulWidget {
   });
 
   @override
-  ConsumerState<ChatInputBar> createState() => _ChatInputBarState();
+  ConsumerState<ChatInputBar> createState() => ChatInputBarState();
 }
 
-class _ChatInputBarState extends ConsumerState<ChatInputBar> {
+class ChatInputBarState extends ConsumerState<ChatInputBar> {
   final TextEditingController _controller = TextEditingController();
   bool _isWebSearchMode = false;
-
-  @override
-  void initState() {
-    super.initState();
-    // Listen for voice partial text updates
-    // (moved out of build to avoid re-registering every frame)
-  }
 
   @override
   void dispose() {
@@ -46,6 +40,10 @@ class _ChatInputBarState extends ConsumerState<ChatInputBar> {
         setState(() => _isWebSearchMode = false);
       }
     }
+  }
+
+  void setWebSearchMode(bool value) {
+    setState(() => _isWebSearchMode = value);
   }
 
   @override
@@ -71,111 +69,144 @@ class _ChatInputBarState extends ConsumerState<ChatInputBar> {
     });
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-      decoration: const BoxDecoration(
-        color: Color(0xFF0a0a0c),
-        border: Border(top: BorderSide(color: Colors.white10)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: const Color(0xFF1a1a20),
-                borderRadius: BorderRadius.circular(30),
-                border: Border.all(color: Colors.white10),
-              ),
-              child: Row(
-                children: [
-                  const SizedBox(width: 12),
-                  if (_isWebSearchMode)
-                    IconButton(
-                      icon: const Icon(Icons.public_off, color: Color(0xFFc69c3a), size: 20),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      onPressed: () => setState(() => _isWebSearchMode = false),
-                    )
-                  else
-                    IconButton(
-                      icon: const Icon(Icons.document_scanner_rounded, color: Color(0xFFc69c3a), size: 20),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      tooltip: 'Scan Image',
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const CameraScanScreen()),
-                        );
-                      },
-                    ),
-                  Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      enabled: !isModelLoading,
-                      style: GoogleFonts.outfit(color: Colors.white),
-                      decoration: InputDecoration(
-                        hintText: isModelLoading
-                            ? 'Model loading...'
-                            : (_isWebSearchMode ? 'Search the web...' : 'Ask Aura...'),
-                        hintStyle: GoogleFonts.outfit(color: Colors.white30),
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-                      ),
-                      onChanged: (value) {
-                        final shouldShow = value.trim().startsWith('/') || value.trim().startsWith('@');
-                        widget.onCommandMenuChanged(shouldShow);
-                      },
-                      onSubmitted: (_) => _sendMessage(),
-                    ),
-                  ),
-                  IconButton(
-                    icon: Icon(
-                      isListening ? Icons.mic_off : Icons.mic,
-                      color: isModelLoading ? Colors.white10 : Colors.white54,
-                    ),
-                    onPressed: isModelLoading
-                        ? null
-                        : () {
-                            if (isListening) {
-                              ref.read(chatProvider.notifier).stopVoiceConversation();
-                            } else {
-                              ref.read(chatProvider.notifier).startListening();
-                            }
-                          },
-                  ),
-                ],
-              ),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+      color: Colors.transparent, // Floating overlay
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.92), // Glassmorphic background
+          borderRadius: BorderRadius.circular(32),
+          border: Border.all(color: Colors.black.withOpacity(0.04), width: 1.0),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
             ),
-          ),
-          const SizedBox(width: 12),
-          GestureDetector(
-            onTap: isModelLoading ? null : _sendMessage,
-            child: Container(
-              width: 50,
-              height: 50,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  colors: isModelLoading
-                      ? [const Color(0xFF2a2a30), const Color(0xFF1a1a20)]
-                      : [const Color(0xFFe6cf8e), const Color(0xFFc69c3a)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
+          ],
+        ),
+        child: Row(
+          children: [
+            // Left: Plus button (attachment/scan/cancel-search)
+            GestureDetector(
+              onTap: () {
+                if (_isWebSearchMode) {
+                  setState(() => _isWebSearchMode = false);
+                } else {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const CameraScanScreen()),
+                  );
+                }
+              },
+              child: Container(
+                width: 42,
+                height: 42,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black12,
+                      blurRadius: 4,
+                      offset: Offset(0, 1.5),
+                    ),
+                  ],
+                ),
+                child: Icon(
+                  _isWebSearchMode ? Icons.public_off : Icons.add,
+                  color: _isWebSearchMode ? ClayColors.goldAccent : ClayColors.textDark,
+                  size: 20,
                 ),
               ),
-              child: Icon(
-                Icons.arrow_upward,
-                color: isModelLoading ? Colors.white10 : Colors.black,
+            ),
+            const SizedBox(width: 8),
+            
+            // Center: TextField
+            Expanded(
+              child: TextField(
+                controller: _controller,
+                enabled: !isModelLoading,
+                style: GoogleFonts.outfit(
+                  color: ClayColors.textDark, 
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
+                decoration: InputDecoration(
+                  hintText: isModelLoading
+                      ? 'Model loading...'
+                      : (_isWebSearchMode ? 'Search the web...' : 'Ask Aura...'),
+                  hintStyle: GoogleFonts.outfit(
+                    color: ClayColors.textHint.withOpacity(0.65),
+                    fontSize: 15,
+                  ),
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                ),
+                onChanged: (value) {
+                  final shouldShow = value.trim().startsWith('/') || value.trim().startsWith('@');
+                  widget.onCommandMenuChanged(shouldShow);
+                },
+                onSubmitted: (_) => _sendMessage(),
               ),
             ),
-          ),
-        ],
+
+            // Right: Microphone
+            IconButton(
+              icon: Icon(
+                isListening ? Icons.mic_off : Icons.mic,
+                color: isModelLoading ? ClayColors.textHint.withOpacity(0.2) : ClayColors.textDark,
+              ),
+              onPressed: isModelLoading
+                  ? null
+                  : () {
+                      if (isListening) {
+                        ref.read(chatProvider.notifier).stopVoiceConversation();
+                      } else {
+                        ref.read(chatProvider.notifier).startListening();
+                      }
+                    },
+            ),
+            const SizedBox(width: 4),
+
+            // Send Button with orange/terracotta gradient
+            GestureDetector(
+              onTap: isModelLoading ? null : _sendMessage,
+              child: Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: isModelLoading
+                        ? [const Color(0xFFE0DCD6), const Color(0xFFCBC7BE)]
+                        : [
+                            const Color(0xFFFF9E80), // Vibrant peach-orange
+                            const Color(0xFFBC4B2E), // Terracotta accent
+                          ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  boxShadow: isModelLoading
+                      ? []
+                      : [
+                          BoxShadow(
+                            color: ClayColors.goldAccent.withOpacity(0.2),
+                            blurRadius: 8,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
+                ),
+                child: const Icon(
+                  Icons.arrow_upward_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
-  }
-
-  /// Allows parent to activate web search mode from command menu
-  void setWebSearchMode(bool value) {
-    setState(() => _isWebSearchMode = value);
   }
 }

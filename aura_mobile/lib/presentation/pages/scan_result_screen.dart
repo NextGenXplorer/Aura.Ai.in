@@ -1,12 +1,15 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:aura_mobile/core/services/ocr_service.dart';
+import 'package:aura_mobile/core/providers/ai_providers.dart';
 import 'package:aura_mobile/presentation/providers/study_provider.dart';
 import 'package:aura_mobile/presentation/providers/chat_provider.dart';
 import 'package:aura_mobile/presentation/pages/deck_view_screen.dart';
+import 'package:aura_mobile/presentation/widgets/clay_components.dart';
 
 class ScanResultScreen extends ConsumerStatefulWidget {
   final OcrResult ocrResult;
@@ -43,14 +46,14 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0a0a0c),
+      backgroundColor: ClayColors.obsidianBg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0a0a0c),
-        title: Text('Scan Result', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold)),
-        iconTheme: const IconThemeData(color: Colors.white),
+        backgroundColor: ClayColors.obsidianBg,
+        title: Text('Scan Result', style: GoogleFonts.outfit(color: ClayColors.textDark, fontWeight: FontWeight.bold)),
+        iconTheme: const IconThemeData(color: ClayColors.textDark),
         actions: [
           IconButton(
-            icon: const Icon(Icons.copy, color: Colors.white54),
+            icon: const Icon(Icons.copy, color: ClayColors.textDark),
             tooltip: 'Copy text',
             onPressed: () {
               Clipboard.setData(ClipboardData(text: _textController.text));
@@ -75,15 +78,17 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
               _categoryBadge(),
               const Spacer(),
               Text(
-                '${widget.ocrResult.blockCount} blocks, ${widget.ocrResult.lineCount} lines',
-                style: GoogleFonts.outfit(color: Colors.white30, fontSize: 12),
+                widget.imagePath.toLowerCase().endsWith('.pdf')
+                    ? '${widget.ocrResult.fullText.length} characters'
+                    : '${widget.ocrResult.blockCount} blocks, ${widget.ocrResult.lineCount} lines',
+                style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 12),
               ),
             ],
           ),
           const SizedBox(height: 16),
 
           // ── Smart Actions ──
-          Text('Quick Actions', style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+          Text('Quick Actions', style: GoogleFonts.outfit(color: ClayColors.textDark, fontSize: 16, fontWeight: FontWeight.w600)),
           const SizedBox(height: 10),
           _actionGrid(),
           const SizedBox(height: 20),
@@ -91,23 +96,23 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
           // ── Extracted Text (Editable) ──
           Row(
             children: [
-              Text('Extracted Text', style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+              Text('Extracted Text', style: GoogleFonts.outfit(color: ClayColors.textDark, fontSize: 16, fontWeight: FontWeight.w600)),
               const Spacer(),
-              Text('Tap to edit', style: GoogleFonts.outfit(color: Colors.white30, fontSize: 11)),
+              Text('Tap to edit', style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 11)),
             ],
           ),
           const SizedBox(height: 8),
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: const Color(0xFF1a1a20),
+              color: const Color(0xFFE5E2DA),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white10),
+              border: Border.all(color: const Color(0xFFCBC7BE)),
             ),
             child: TextField(
               controller: _textController,
               maxLines: null,
-              style: GoogleFonts.outfit(color: Colors.white70, fontSize: 14, height: 1.6),
+              style: GoogleFonts.outfit(color: ClayColors.textDark, fontSize: 14, height: 1.6),
               decoration: const InputDecoration(
                 border: InputBorder.none,
                 isDense: true,
@@ -122,6 +127,45 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
 
   /// Safe image preview with error handling for missing/corrupt files
   Widget _buildImagePreview() {
+    if (widget.imagePath.toLowerCase().endsWith('.pdf')) {
+      final fileName = widget.imagePath.split('/').last.split('\\').last;
+      return Container(
+        height: 180,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: const Color(0xFFE5E2DA),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFCBC7BE)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.picture_as_pdf_rounded, color: Colors.redAccent, size: 56),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                fileName,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.outfit(
+                  color: ClayColors.textDark,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'PDF Document',
+              style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 12),
+            ),
+          ],
+        ),
+      );
+    }
+
     final file = File(widget.imagePath);
 
     return FutureBuilder<bool>(
@@ -146,16 +190,16 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
       height: 180,
       width: double.infinity,
       decoration: BoxDecoration(
-        color: const Color(0xFF1a1a20),
+        color: const Color(0xFFE5E2DA),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.image_not_supported, color: Colors.white24, size: 40),
+          const Icon(Icons.image_not_supported, color: ClayColors.textHint, size: 40),
           const SizedBox(height: 8),
           Text('Image preview unavailable',
-              style: GoogleFonts.outfit(color: Colors.white24, fontSize: 12)),
+              style: GoogleFonts.outfit(color: ClayColors.textHint, fontSize: 12)),
         ],
       ),
     );
@@ -189,8 +233,21 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
   }
 
   Widget _actionGrid() {
+    // Show the AI-vision action only when the active model can see images and the file is not a PDF.
+    final isPdf = widget.imagePath.toLowerCase().endsWith('.pdf');
+    final hasVision = ref.read(llmServiceProvider).supportsVision && !isPdf;
     return Column(
       children: [
+        if (hasVision) ...[
+          _actionCard(
+            icon: Icons.visibility,
+            title: 'Analyze with AI Vision',
+            subtitle: 'Let your vision model see and explain this image',
+            color: const Color(0xFFc69c3a),
+            onTap: _analyzeWithVision,
+          ),
+          const SizedBox(height: 8),
+        ],
         Row(
           children: [
             Expanded(child: _actionCard(
@@ -257,9 +314,9 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
             children: [
               Icon(icon, color: color, size: 22),
               const SizedBox(height: 8),
-              Text(title, style: GoogleFonts.outfit(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+              Text(title, style: GoogleFonts.outfit(color: ClayColors.textDark, fontSize: 13, fontWeight: FontWeight.w600)),
               const SizedBox(height: 2),
-              Text(subtitle, style: GoogleFonts.outfit(color: Colors.white30, fontSize: 10)),
+              Text(subtitle, style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 10)),
             ],
           ),
         ),
@@ -268,6 +325,37 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
   }
 
   // ── Actions ─────────────────────────────────────────────────────────────────
+
+  /// Sends the captured image to the active vision model for analysis.
+  Future<void> _analyzeWithVision() async {
+    if (_isActionRunning) return;
+    final file = File(widget.imagePath);
+    if (!await file.exists()) {
+      _showSnack('Image file not found. Please rescan.');
+      return;
+    }
+
+    setState(() => _isActionRunning = true);
+    try {
+      final Uint8List bytes = await file.readAsBytes();
+      // A clear, general vision prompt; the OCR text is included as a hint.
+      final ocrHint = widget.ocrResult.fullText.trim();
+      final prompt = ocrHint.isEmpty
+          ? 'Look at this image and describe what it shows. Explain anything important.'
+          : 'Look at this image and explain what it shows. For reference, text detected in it: "$ocrHint"';
+
+      if (!mounted) return;
+      ref.read(chatProvider.notifier).sendImageMessage(prompt, bytes);
+      // Jump to the chat so the user sees the streaming vision response.
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('Could not analyze the image. Please try again.');
+      debugPrint('Vision analyze error: $e');
+    } finally {
+      if (mounted) setState(() => _isActionRunning = false);
+    }
+  }
 
   Future<void> _createFlashcards() async {
     final text = _textController.text.trim();

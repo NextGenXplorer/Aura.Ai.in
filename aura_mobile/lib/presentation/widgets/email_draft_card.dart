@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:aura_mobile/presentation/widgets/clay_components.dart';
 
 /// Extracted email draft card widget — keeps heavy UI logic out of the chat list builder.
 class EmailDraftCard extends StatefulWidget {
@@ -40,13 +41,9 @@ class _EmailDraftCardState extends State<EmailDraftCard> {
     return Container(
       margin: const EdgeInsets.only(top: 12, bottom: 4, left: 16, right: 16),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF1a1a22), Color(0xFF141418)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+        color: ClayColors.warmGrey,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFc69c3a).withOpacity(0.4)),
+        border: Border.all(color: ClayColors.goldAccent.withOpacity(0.4)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -55,17 +52,17 @@ class _EmailDraftCardState extends State<EmailDraftCard> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: BoxDecoration(
-              color: const Color(0xFFc69c3a).withOpacity(0.12),
+              color: ClayColors.goldAccent.withOpacity(0.12),
               borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
             ),
             child: Row(
               children: [
-                const Icon(Icons.email_outlined, color: Color(0xFFc69c3a), size: 18),
+                const Icon(Icons.email_outlined, color: ClayColors.goldAccent, size: 18),
                 const SizedBox(width: 8),
                 Text(
                   'Email Draft',
                   style: GoogleFonts.outfit(
-                    color: const Color(0xFFc69c3a),
+                    color: ClayColors.goldAccent,
                     fontWeight: FontWeight.bold,
                     fontSize: 13,
                   ),
@@ -86,7 +83,7 @@ class _EmailDraftCardState extends State<EmailDraftCard> {
                 Text(
                   'Body',
                   style: GoogleFonts.outfit(
-                    color: Colors.white38,
+                    color: ClayColors.textMuted,
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
                   ),
@@ -96,28 +93,28 @@ class _EmailDraftCardState extends State<EmailDraftCard> {
                     ? TextField(
                         controller: _editController,
                         maxLines: null,
-                        style: GoogleFonts.outfit(color: Colors.white, fontSize: 14, height: 1.6),
+                        style: GoogleFonts.outfit(color: ClayColors.textDark, fontSize: 14, height: 1.6),
                         decoration: InputDecoration(
                           filled: true,
-                          fillColor: const Color(0xFF2a2a35),
+                          fillColor: const Color(0xFFE5E2DA),
                           contentPadding: const EdgeInsets.all(12),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(10),
-                            borderSide: const BorderSide(color: Color(0xFFc69c3a), width: 1),
+                            borderSide: const BorderSide(color: ClayColors.goldAccent, width: 1),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(10),
-                            borderSide: const BorderSide(color: Color(0xFFc69c3a), width: 1.5),
+                            borderSide: const BorderSide(color: ClayColors.goldAccent, width: 1.5),
                           ),
                           enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(10),
-                            borderSide: BorderSide(color: Colors.white.withOpacity(0.15)),
+                            borderSide: BorderSide(color: Colors.black.withOpacity(0.1)),
                           ),
                         ),
                       )
                     : Text(
                         widget.body ?? '',
-                        style: GoogleFonts.outfit(color: Colors.white70, fontSize: 14, height: 1.6),
+                        style: GoogleFonts.outfit(color: ClayColors.textDark, fontSize: 14, height: 1.6),
                       ),
               ],
             ),
@@ -133,14 +130,14 @@ class _EmailDraftCardState extends State<EmailDraftCard> {
                     icon: Icon(
                       _isEditing ? Icons.check_circle_outline : Icons.edit_outlined,
                       size: 16,
-                      color: Colors.white70,
+                      color: ClayColors.textMuted,
                     ),
                     label: Text(
                       _isEditing ? 'Done Editing' : 'Edit Email',
-                      style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13),
+                      style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 13),
                     ),
                     style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                      side: BorderSide(color: Colors.black.withOpacity(0.12)),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                       padding: const EdgeInsets.symmetric(vertical: 10),
                     ),
@@ -153,17 +150,17 @@ class _EmailDraftCardState extends State<EmailDraftCard> {
                 // Send Email button
                 Expanded(
                   child: ElevatedButton.icon(
-                    icon: const Icon(Icons.send, size: 16, color: Colors.black),
+                    icon: const Icon(Icons.send, size: 16, color: Colors.white),
                     label: Text(
                       'Send Email',
                       style: GoogleFonts.outfit(
-                        color: Colors.black,
+                        color: Colors.white,
                         fontWeight: FontWeight.bold,
                         fontSize: 13,
                       ),
                     ),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFc69c3a),
+                      backgroundColor: ClayColors.goldAccent,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                       padding: const EdgeInsets.symmetric(vertical: 10),
                     ),
@@ -212,13 +209,13 @@ class _EmailField extends StatelessWidget {
         Text(
           label,
           style: GoogleFonts.outfit(
-            color: Colors.white38,
+            color: ClayColors.textMuted,
             fontSize: 11,
             fontWeight: FontWeight.w600,
           ),
         ),
         const SizedBox(height: 2),
-        Text(value, style: GoogleFonts.outfit(color: Colors.white, fontSize: 14)),
+        Text(value, style: GoogleFonts.outfit(color: ClayColors.textDark, fontSize: 14)),
       ],
     );
   }

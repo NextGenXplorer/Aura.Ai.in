@@ -21,6 +21,10 @@ import com.aura.mobile.aura_mobile.assistant.ScreenContextAccessibilityService
 import com.aura.mobile.aura_mobile.assistant.AuraNotificationListenerService
 
 class MainActivity: FlutterActivity() {
+    companion object {
+        var pendingProcessTextQuery: String? = null
+    }
+
     private val CHANNEL = "com.aura.ai/memory"
     private val APP_CONTROL_CHANNEL = "com.aura.ai/app_control"
     private val ASSISTANT_STATE_CHANNEL = "com.aura.ai/assistant_state"
@@ -44,6 +48,22 @@ class MainActivity: FlutterActivity() {
         }
     }
 
+    private val notificationReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent != null) {
+                val data = mapOf(
+                    "packageName" to intent.getStringExtra("packageName"),
+                    "appName" to intent.getStringExtra("appName"),
+                    "title" to intent.getStringExtra("title"),
+                    "text" to intent.getStringExtra("text")
+                )
+                runOnUiThread {
+                    notificationsChannel?.invokeMethod("onNotificationReceived", data)
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
@@ -56,6 +76,47 @@ class MainActivity: FlutterActivity() {
             )
         }
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        handleProcessTextIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleProcessTextIntent(intent)
+    }
+
+    private fun handleProcessTextIntent(intent: Intent?) {
+        if (intent == null) return
+        if (Intent.ACTION_PROCESS_TEXT == intent.action) {
+            val selectedText = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
+            if (selectedText != null && selectedText.isNotEmpty()) {
+                Log.d("AuraMainActivity", "PROCESS_TEXT received: $selectedText")
+                pendingProcessTextQuery = selectedText
+                deliverPendingProcessTextQuery()
+            }
+        }
+    }
+
+    private fun deliverPendingProcessTextQuery() {
+        val query = pendingProcessTextQuery
+        val channel = clipboardChannel
+        if (query != null && channel != null) {
+            runOnUiThread {
+                Log.d("AuraMainActivity", "Delivering PROCESS_TEXT query: $query")
+                channel.invokeMethod("onProcessTextIntent", query, object : MethodChannel.Result {
+                    override fun success(result: Any?) {
+                        Log.d("AuraMainActivity", "Successfully delivered PROCESS_TEXT query")
+                        pendingProcessTextQuery = null
+                    }
+                    override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
+                        Log.e("AuraMainActivity", "Error delivering PROCESS_TEXT: $errorMessage")
+                    }
+                    override fun notImplemented() {
+                        Log.d("AuraMainActivity", "onProcessTextIntent not implemented on Dart side yet (will poll)")
+                    }
+                })
+            }
+        }
     }
 
     override fun onResume() {
@@ -67,6 +128,7 @@ class MainActivity: FlutterActivity() {
             Log.d("AuraMainActivity", "onResume: Delivering pending query: $pending")
             assistantAiChannel?.invokeMethod("processAIQuery", pending)
         }
+        deliverPendingProcessTextQuery()
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -422,9 +484,20 @@ class MainActivity: FlutterActivity() {
                 "isClipboardMonitorActive" -> {
                     result.success(ClipboardMonitorService.isActive)
                 }
+                "getPendingProcessText" -> {
+                    val query = pendingProcessTextQuery
+                    if (query != null) {
+                        pendingProcessTextQuery = null
+                        Log.d("AuraMainActivity", "getPendingProcessText: returning '$query'")
+                        result.success(query)
+                    } else {
+                        result.success(null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
+        deliverPendingProcessTextQuery()
 
         // ═══ Screen Context AI Channel ═══
         screenContextChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SCREEN_CONTEXT_CHANNEL)
@@ -485,6 +558,13 @@ class MainActivity: FlutterActivity() {
                 }
                 else -> result.notImplemented()
             }
+        }
+
+        val notifFilter = IntentFilter("com.aura.mobile.assistant.NOTIFICATION_POSTED")
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(notificationReceiver, notifFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(notificationReceiver, notifFilter)
         }
     }
 
@@ -752,6 +832,11 @@ class MainActivity: FlutterActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        try {
+            unregisterReceiver(notificationReceiver)
+        } catch (e: Exception) {
+            // Ignore
+        }
         // Clear handler to prevent stale refs to dead Flutter engine
         AssistantForegroundService.aiRequestHandler = null
     }

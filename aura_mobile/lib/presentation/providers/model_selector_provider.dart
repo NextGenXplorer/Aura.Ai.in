@@ -11,6 +11,35 @@ import 'package:shared_preferences/shared_preferences.dart';
 // Model Manager Provider
 final modelManagerProvider = Provider((ref) => ModelManager());
 
+/// Maximum number of total download attempts before a download is treated as
+/// failed (Req 7.4).
+const int kMaxDownloadAttempts = 3;
+
+/// What to do after a download attempt has failed.
+enum DownloadFailureDecision {
+  /// Another attempt is allowed — retry the download.
+  retry,
+
+  /// All attempts have been used — remove the partial file and report failure.
+  exhausted,
+}
+
+/// Pure decision used by the retry logic.
+///
+/// Given the number of attempts made so far ([attemptsSoFar], 1-based), decide
+/// whether another retry is allowed or the download has exhausted its attempts.
+/// A retry is allowed only while fewer than [maxAttempts] attempts have been
+/// made (Req 7.4); on the final failure the caller removes the partial file and
+/// reports failure to the user (Req 7.5).
+DownloadFailureDecision decideDownloadFailure(
+  int attemptsSoFar, {
+  int maxAttempts = kMaxDownloadAttempts,
+}) {
+  return attemptsSoFar < maxAttempts
+      ? DownloadFailureDecision.retry
+      : DownloadFailureDecision.exhausted;
+}
+
 // Model Selector State
 class ModelSelectorState {
   final List<ModelInfo> availableModels;
@@ -75,6 +104,21 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
     super.dispose();
   }
 
+  /// Folds a raw download progress reading into the reported progress value.
+  ///
+  /// [previous] is the last reported progress, already a value in `[0, 1]`.
+  /// [rawPercent] is a freshly observed progress reading on a 0–100 percentage
+  /// scale (as emitted by the download pipeline as more bytes are received),
+  /// supplied as an `int` or `double`.
+  ///
+  /// The result is always clamped to the closed interval `[0, 1]` and is never
+  /// less than [previous], so the reported progress is bounded and monotonic
+  /// non-decreasing across readings, even across retries (Req 7.2).
+  static double foldDownloadProgress(double previous, num rawPercent) {
+    final reported = (rawPercent / 100).clamp(0.0, 1.0);
+    return reported < previous ? previous : reported;
+  }
+
   void _listenToDownloads() {
     final runAnywhere = _ref.read(runAnywhereProvider);
     _downloadSubscription = runAnywhere.downloadUpdates.listen((update) {
@@ -93,9 +137,12 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
       }
 
       if (update.status == DownloadTaskStatus.running) {
-        final progress = update.progress / 100;
+        // Report progress as a value in [0, 1] that never decreases as more
+        // bytes arrive, even across retries (Req 7.2).
+        final current = state.downloadProgress[modelId] ?? 0.0;
+        final monotonic = foldDownloadProgress(current, update.progress);
         final newProgress = Map<String, double>.from(state.downloadProgress);
-        newProgress[modelId] = progress;
+        newProgress[modelId] = monotonic;
         state = state.copyWith(downloadProgress: newProgress);
       } else if (update.status == DownloadTaskStatus.complete) {
         final newProgress = Map<String, double>.from(state.downloadProgress);
@@ -118,35 +165,25 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
       } else if (update.status == DownloadTaskStatus.failed) {
         _taskIdToModelId.remove(update.id);
 
-        final retryCount = _downloadRetryCount[modelId] ?? 0;
+        // _downloadRetryCount holds the number of attempts made so far
+        // (1-based). Allow up to 3 total attempts (Req 7.4).
+        final attempts = _downloadRetryCount[modelId] ?? 1;
 
-        // Automatically retry up to 3 times
-        if (retryCount < 3) {
+        if (decideDownloadFailure(attempts) == DownloadFailureDecision.retry) {
           _errorHandler.logWarning(
-            'Download failed for $modelId. Retrying (${retryCount + 1}/3)...',
+            'Download failed for $modelId. Retrying (attempt ${attempts + 1}/3)...',
           );
 
           final newErrors = Map<String, String?>.from(state.downloadErrors);
-          newErrors[modelId] = 'Download failed. Retrying (${retryCount + 1}/3)...';
+          newErrors[modelId] = 'Download failed. Retrying (attempt ${attempts + 1}/3)...';
           state = state.copyWith(downloadErrors: newErrors);
 
           // Retry after delay (don't await to avoid blocking the stream)
           retryDownload(modelId);
         } else {
-          // Max retries exceeded
-          final newProgress = Map<String, double>.from(state.downloadProgress);
-          newProgress.remove(modelId);
-
-          final newErrors = Map<String, String?>.from(state.downloadErrors);
-          newErrors[modelId] =
-              "Download failed after 3 attempts. Please check your connection.";
-
-          state = state.copyWith(
-            downloadProgress: newProgress,
-            downloadErrors: newErrors,
-          );
-
-          _downloadRetryCount.remove(modelId);
+          // All 3 attempts exhausted: remove the partial file and report
+          // failure to the user (Req 7.5).
+          _failDownloadAfterExhaustion(modelId);
         }
       }
     });
@@ -173,6 +210,9 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
     for (final model in modelCatalog) {
       if (await modelManager.isModelDownloaded(model.id)) {
         downloadedIds.add(model.id);
+        // A confirmed-downloaded model must not carry a stale error from a
+        // prior failed attempt.
+        downloadErrors.remove(model.id);
       } else {
         await modelManager.verifyAndCleanupModel(model.id);
       }
@@ -236,6 +276,24 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
   }
 
   Future<void> downloadModel(String modelId) async {
+    // Public, user-initiated download. Reset attempt tracking and any prior
+    // progress so a fresh download starts from a clean slate. Works for both
+    // `gguf` and `litert` models — the pipeline is engine-agnostic.
+    _downloadRetryCount[modelId] = 1; // attempt 1 of 3
+
+    final resetProgress = Map<String, double>.from(state.downloadProgress);
+    resetProgress.remove(modelId);
+    state = state.copyWith(downloadProgress: resetProgress);
+
+    await _attemptDownload(modelId);
+  }
+
+  /// Dispatch a single download attempt without altering the attempt counter.
+  ///
+  /// Stores the file under the catalog file name (Req 7.1) and validates disk
+  /// space first so an insufficient-storage error blocks the download before
+  /// it starts (Req 7.8).
+  Future<void> _attemptDownload(String modelId) async {
     final model = modelCatalog.firstWhere((m) => m.id == modelId);
     final modelManager = _ref.read(modelManagerProvider);
     final runAnywhere = _ref.read(runAnywhereProvider);
@@ -246,25 +304,31 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
     state = state.copyWith(downloadErrors: newErrors);
 
     try {
-      // 1. Validate disk space before starting download
+      // 1. Validate disk space before starting download (Req 7.8)
       await modelManager.validateDiskSpace(modelId);
 
-      // 2. Start download
+      // 2. Start download — destination path is derived from the catalog file
+      //    name via getModelPath (Req 7.1).
       final modelPath = await modelManager.getModelPath(modelId);
       final taskId = await runAnywhere.downloadModel(model.url, modelPath);
 
       if (taskId != null) {
         _taskIdToModelId[taskId] = modelId;
-        _downloadRetryCount[modelId] = 0; // Reset retry count
 
+        // Seed progress without dropping any already-reported value so the
+        // reported progress stays monotonic across retries (Req 7.2).
         final newProgress = Map<String, double>.from(state.downloadProgress);
-        newProgress[modelId] = 0.0;
+        newProgress[modelId] = newProgress[modelId] ?? 0.0;
         state = state.copyWith(downloadProgress: newProgress);
 
-        _errorHandler.logInfo('Started download for ${model.name}');
+        _errorHandler.logInfo(
+          'Started download for ${model.name} '
+          '(attempt ${_downloadRetryCount[modelId] ?? 1}/3)',
+        );
       }
     } on ModelException catch (e) {
       // Handle specific model exceptions with user-friendly messages
+      // (e.g. insufficient storage). These are terminal — no retry.
       _handleDownloadError(modelId, e.userMessage);
       _errorHandler.handleError(e);
     } catch (e) {
@@ -287,25 +351,51 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
     );
   }
 
-  /// Retry a failed download
-  Future<void> retryDownload(String modelId) async {
-    final retryCount = _downloadRetryCount[modelId] ?? 0;
+  /// Remove the partial file and surface a download-failure error after all
+  /// 3 attempts have been exhausted (Req 7.5).
+  Future<void> _failDownloadAfterExhaustion(String modelId) async {
+    final modelManager = _ref.read(modelManagerProvider);
 
-    if (retryCount >= 3) {
-      _handleDownloadError(
-        modelId,
-        'Download failed after 3 attempts. Please check your connection and try again later.',
-      );
+    // Remove any partially downloaded file.
+    await modelManager.removePartialDownload(modelId);
+
+    final newProgress = Map<String, double>.from(state.downloadProgress);
+    newProgress.remove(modelId);
+
+    final newErrors = Map<String, String?>.from(state.downloadErrors);
+    newErrors[modelId] =
+        'Download failed after 3 attempts. Please check your connection.';
+
+    state = state.copyWith(
+      downloadProgress: newProgress,
+      downloadErrors: newErrors,
+    );
+
+    _downloadRetryCount.remove(modelId);
+
+    // Reduce reported storage in case a partial file was removed.
+    await _updateStorageUsed();
+  }
+
+  /// Retry a failed download. Increments the attempt counter and re-dispatches,
+  /// up to 3 total attempts (Req 7.4); cleans up after the third (Req 7.5).
+  Future<void> retryDownload(String modelId) async {
+    final attempts = _downloadRetryCount[modelId] ?? 1;
+
+    if (decideDownloadFailure(attempts) == DownloadFailureDecision.exhausted) {
+      await _failDownloadAfterExhaustion(modelId);
       return;
     }
 
-    _downloadRetryCount[modelId] = retryCount + 1;
-    _errorHandler.logInfo('Retrying download for $modelId (attempt ${retryCount + 1}/3)');
+    _downloadRetryCount[modelId] = attempts + 1;
+    _errorHandler.logInfo(
+      'Retrying download for $modelId (attempt ${attempts + 1}/3)',
+    );
 
     // Wait before retrying (exponential backoff)
-    await Future.delayed(_errorHandler.getRetryDelay(retryCount));
+    await Future.delayed(_errorHandler.getRetryDelay(attempts - 1));
 
-    await downloadModel(modelId);
+    await _attemptDownload(modelId);
   }
 
   Future<void> deleteModel(String modelId) async {
@@ -335,28 +425,65 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
 
   Future<void> selectModel(String modelId) async {
     if (!state.isDownloaded(modelId)) return;
-    
-    // Clear active model to trigger "Loading..." state in UI
-    state = state.copyWith(activeModelId: null);
 
+    // Clear any stale error for this model and clear the active model to
+    // trigger the "Loading..." state in the UI. A fresh select attempt should
+    // never show an error left over from a previous attempt.
+    final clearedErrors = Map<String, String?>.from(state.downloadErrors);
+    clearedErrors.remove(modelId);
+    state = state.copyWith(activeModelId: null, downloadErrors: clearedErrors);
+
+    SharedPreferences? prefs;
     try {
       final modelManager = _ref.read(modelManagerProvider);
       final llmService = _ref.read(llmServiceProvider);
+
+      // Reconcile: make sure the file is actually present and valid before
+      // attempting a load. If it isn't, fix the downloaded state instead of
+      // surfacing a confusing "loaded but not found" situation.
+      final stillDownloaded = await modelManager.isModelDownloaded(modelId);
+      if (!stillDownloaded) {
+        final newDownloaded = Set<String>.from(state.downloadedModelIds)
+          ..remove(modelId);
+        final newErrors = Map<String, String?>.from(state.downloadErrors);
+        newErrors[modelId] = 'Model file is missing. Please download again.';
+        state = state.copyWith(
+          downloadedModelIds: newDownloaded,
+          downloadErrors: newErrors,
+        );
+        await _updateStorageUsed();
+        return;
+      }
+
       final modelPath = await modelManager.getModelPath(modelId);
+      
+      // Set sentinel before loading
+      prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('model_load_crashed_sentinel', true);
+
       await llmService.loadModel(modelPath);
-      final prefs = await SharedPreferences.getInstance();
+
+      // Clear sentinel on success
+      await prefs.setBool('model_load_crashed_sentinel', false);
+
       await prefs.setString('active_model_id', modelId);
       await prefs.setString('selected_model_path', modelPath);
       state = state.copyWith(activeModelId: modelId);
 
       _errorHandler.logInfo('Successfully loaded model: ${modelManager.getModelById(modelId)?.name}');
     } on ModelException catch (e) {
+      if (prefs != null) {
+        await prefs.setBool('model_load_crashed_sentinel', false);
+      }
       _errorHandler.handleError(e);
       // Show error in UI
       final newErrors = Map<String, String?>.from(state.downloadErrors);
       newErrors[modelId] = e.userMessage;
       state = state.copyWith(downloadErrors: newErrors);
     } catch (e) {
+      if (prefs != null) {
+        await prefs.setBool('model_load_crashed_sentinel', false);
+      }
       _errorHandler.logWarning('Error selecting model: $e');
       final newErrors = Map<String, String?>.from(state.downloadErrors);
       newErrors[modelId] = 'Failed to load model';

@@ -123,7 +123,7 @@ class IntentDetectionService {
     // Very short messages (≤ 2 words) that don't contain a special trigger
     // keyword go straight to chat, preventing tiny typos from mis-routing.
     final greetingRe = RegExp(
-      r'^(hi+|hey+|hello+|heyy+|hyy*|yo+|sup|howdy|greetings|namaste|'
+      r'^(hi+|hey+|hello+|hai|haii*|heyy+|hyy*|yo+|sup|howdy|greetings|namaste|'
       r'good\s*(morning|afternoon|evening|night)|whats\s*up|'
       r'how\s+are\s+you|how\s+r\s+u|hows\s+it\s+going|'
       r'hola|bonjour|salut|ciao)\s*[!?.]*$',
@@ -589,9 +589,12 @@ class IntentDetectionService {
     // SMART APP ACTIONS - Intent Detection
     // ═══════════════════════════════════════════════════════════════════════
 
-    // WhatsApp message: "send whatsapp to Mom saying hi" / "whatsapp Mom hello"
+    // WhatsApp message: requires imperative form to avoid catching questions
+    // like "What's the message I sent on WhatsApp?" or "How do I send messages
+    // on WhatsApp?". Must start with send/message/text/whatsapp + something.
     if (RegExp(
-      r'\b(whatsapp|whats\s*app)\b.*\b(to|send|message)\b|\b(send|message)\b.*\b(whatsapp|whats\s*app)\b',
+      r'^(send|message|text|whatsapp|whats\s*app|wa)\s+.*\b(whatsapp|whats\s*app|wa)\b|'
+      r'^(whatsapp|whats\s*app|wa)\s+\w+',
       caseSensitive: false,
     ).hasMatch(lo)) {
       debugPrint('INTENT_DETECTION: WhatsApp message -> sendWhatsApp');
@@ -607,12 +610,12 @@ class IntentDetectionService {
       return IntentType.searchOnApp;
     }
 
-    // UPI Payment: "pay 500 to X" / "upi pay" / "send money" / "pay on gpay"
+    // UPI Payment: requires imperative form (pay/send-money) to avoid catching
+    // info questions like "Tell me about UPI" or "What is GPay".
     if (RegExp(
-      r'\b(pay|upi|gpay|phonpe|paytm|google\s+pay|phone\s*pe)\b.*\b(to|send|pay|money|₹|rs)\b|\b(send\s+money|make\s+payment)\b',
+      r'^(pay|send\s+money|make\s+(a\s+)?payment|upi\s+pay|gpay|phonpe|phone\s*pe|paytm)\b',
       caseSensitive: false,
-    ).hasMatch(lo) &&
-        !lo.contains('attention') && !lo.contains('bill')) {
+    ).hasMatch(lo)) {
       debugPrint('INTENT_DETECTION: UPI payment -> upiPayment');
       return IntentType.upiPayment;
     }

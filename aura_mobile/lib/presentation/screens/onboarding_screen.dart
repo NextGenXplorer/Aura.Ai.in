@@ -1,11 +1,13 @@
 import 'package:aura_mobile/core/services/device_service.dart';
 import 'package:aura_mobile/domain/services/model_recommendation_service.dart';
 import 'package:aura_mobile/domain/entities/model_info.dart';
+import 'package:aura_mobile/presentation/widgets/clay_components.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:aura_mobile/ai/run_anywhere_service.dart';
+import 'package:aura_mobile/core/providers/ai_providers.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -55,7 +57,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0a0a0c), // Obsidian
+      backgroundColor: ClayColors.obsidianBg,
       body: PageView(
         controller: _pageController,
         physics: const NeverScrollableScrollPhysics(),
@@ -70,56 +72,69 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
   Widget _buildWelcomeStep() {
     return Padding(
-      padding: const EdgeInsets.all(24.0),
+      padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 40.0),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.shield_moon, size: 80, color: Color(0xFFc69c3a)), // Premium Gold
-          const SizedBox(height: 24),
+          ClayContainer(
+            borderRadius: 32,
+            depth: 8,
+            padding: const EdgeInsets.all(24),
+            baseColor: ClayColors.warmGrey,
+            highlightColor: ClayColors.highlight,
+            shadowColor: ClayColors.shadow,
+            child: const Icon(
+              Icons.shield_moon_outlined, 
+              size: 56, 
+              color: ClayColors.goldAccent,
+            ),
+          ),
+          const SizedBox(height: 32),
           Text(
             "Welcome to AURA",
             style: GoogleFonts.outfit(
-              color: Colors.white, 
-              fontSize: 32, 
-              fontWeight: FontWeight.bold
+              color: ClayColors.textDark, 
+              fontSize: 28, 
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.5,
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           Text(
             "Your private, offline AI assistant.\nLet's get to know you.",
             textAlign: TextAlign.center,
-            style: GoogleFonts.outfit(color: Colors.white70, fontSize: 16),
-          ),
-          const SizedBox(height: 48),
-          TextField(
-            controller: _nameController,
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              hintText: "Enter your name",
-              hintStyle: TextStyle(color: Colors.grey[600]),
-              filled: true,
-              fillColor: Colors.grey[900],
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            style: GoogleFonts.outfit(
+              color: ClayColors.textMuted, 
+              fontSize: 15,
+              height: 1.4,
             ),
           ),
-          const SizedBox(height: 24),
-          ElevatedButton(
-            onPressed: () {
-              if (_nameController.text.isNotEmpty) {
+          const SizedBox(height: 48),
+          ClayTextField(
+            controller: _nameController,
+            hintText: "Enter your name",
+            prefixIcon: Icons.person_outline_rounded,
+          ),
+          const SizedBox(height: 32),
+          ClayButton(
+            onTap: () {
+              if (_nameController.text.trim().isNotEmpty) {
                  _pageController.nextPage(
-                   duration: const Duration(milliseconds: 300), 
+                   duration: const Duration(milliseconds: 400), 
                    curve: Curves.ease
                  );
                  _analyzeDevice();
               }
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFc69c3a), // Premium Gold
-              foregroundColor: Colors.black,
-              minimumSize: const Size(double.infinity, 50),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            baseColor: ClayColors.goldAccent,
+            highlightColor: ClayColors.goldHighlight,
+            shadowColor: ClayColors.goldShadow,
+            child: const Center(
+              child: Text(
+                "Next", 
+                style: TextStyle(color: ClayColors.goldHighlight, fontWeight: FontWeight.bold, fontSize: 16),
+              ),
             ),
-            child: Text("Next", style: GoogleFonts.outfit(fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -128,21 +143,73 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
   Widget _buildAnalysisStep() {
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const CircularProgressIndicator(color: Color(0xFFD4AF37)),
-          const SizedBox(height: 24),
-          Text(
-            "Analyzing Device Hardware...",
-            style: const TextStyle(color: Colors.white, fontSize: 18),
+      child: Padding(
+        padding: const EdgeInsets.all(32.0),
+        child: ClayContainer(
+          borderRadius: 28,
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const SizedBox(
+                width: 44,
+                height: 44,
+                child: CircularProgressIndicator(
+                  color: ClayColors.goldAccent,
+                  strokeWidth: 3.5,
+                ),
+              ),
+              const SizedBox(height: 28),
+              Text(
+                "Analyzing Hardware",
+                style: GoogleFonts.outfit(
+                  color: ClayColors.textDark, 
+                  fontSize: 18, 
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                "Detecting optimized engine support...",
+                style: GoogleFonts.outfit(
+                  color: ClayColors.textMuted, 
+                  fontSize: 13,
+                ),
+              ),
+              if (_deviceInfo != null) ...[
+                const SizedBox(height: 24),
+                ClayContainer(
+                  borderRadius: 16,
+                  isInset: true,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  baseColor: const Color(0xFFE5E2DA),
+                  highlightColor: const Color(0xFFF7F4EF),
+                  shadowColor: const Color(0xFFCBC7BE),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text("RAM Capacity", style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 13)),
+                          Text("${_deviceInfo!.totalRamMB} MB", style: GoogleFonts.outfit(color: ClayColors.textDark, fontWeight: FontWeight.w600, fontSize: 13)),
+                        ],
+                      ),
+                      const Divider(color: Colors.black12, height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text("Architecture", style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 13)),
+                          Text(_deviceInfo!.isArm64 ? 'ARM64 Supported' : 'Unsupported', style: GoogleFonts.outfit(color: ClayColors.textDark, fontWeight: FontWeight.w600, fontSize: 13)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ]
+            ],
           ),
-          if (_deviceInfo != null) ...[
-            const SizedBox(height: 20),
-            Text("RAM: ${_deviceInfo!.totalRamMB} MB", style: TextStyle(color: Colors.grey)),
-            Text("Arch: ${_deviceInfo!.isArm64 ? 'Arm64' : 'Unknown'}", style: TextStyle(color: Colors.grey)),
-          ]
-        ],
+        ),
       ),
     );
   }
@@ -150,18 +217,22 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   Widget _buildRecommendationStep() {
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.all(24.0),
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              "Hello ${_nameController.text},",
-              style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+              "Hello, ${_nameController.text}",
+              style: GoogleFonts.outfit(
+                color: ClayColors.textDark, 
+                fontSize: 24, 
+                fontWeight: FontWeight.bold,
+              ),
             ),
-            const SizedBox(height: 8),
-            const Text(
-              "Based on your device capability,\nwe recommend these models:",
-              style: TextStyle(color: Colors.grey, fontSize: 16),
+            const SizedBox(height: 6),
+            Text(
+              "Based on your hardware capabilities,\nwe recommend installing these local models:",
+              style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 14, height: 1.4),
             ),
             const SizedBox(height: 24),
             Expanded(
@@ -169,117 +240,125 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 itemCount: _recommendations.length,
                 itemBuilder: (context, index) {
                   final model = _recommendations[index];
-                  // First item is likely "Best" (or use logic)
-                  String badge = "";
+                  final isSelected = _selectedModelId == model.id;
+                  
+                  String badgeLabel = "";
                   Color badgeColor = Colors.transparent;
                   
-                  // Simple badge logic
                   if (model.id.contains('smollm')) {
-                     badge = "🪶 Lightweight";
-                     badgeColor = Colors.green;
+                     badgeLabel = "Lightweight";
+                     badgeColor = ClayColors.greenAccent;
                   } else if (model.id.contains('mistral') || model.id.contains('llama-3')) {
-                     badge = "⭐ Best Performance";
-                     badgeColor = const Color(0xFFD4AF37);
+                     badgeLabel = "Optimal Performance";
+                     badgeColor = ClayColors.goldAccent;
                   } else {
-                     badge = "⚖ Balanced";
-                     badgeColor = Colors.blue;
+                     badgeLabel = "Balanced";
+                     badgeColor = ClayColors.blueAccent;
                   }
 
-                  return Card(
-                    color: Colors.grey[900],
-                    margin: const EdgeInsets.only(bottom: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      side: BorderSide(
-                        color: _selectedModelId == model.id ? const Color(0xFFD4AF37) : Colors.transparent,
-                        width: 2
-                      )
-                    ),
-                    child: InkWell(
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 16.0),
+                    child: ClayButton(
                       onTap: () {
-                         setState(() => _selectedModelId = model.id);
+                        setState(() => _selectedModelId = model.id);
                       },
-                      borderRadius: BorderRadius.circular(16),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: badgeColor.withOpacity(0.2),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(
-                                    badge,
-                                    style: TextStyle(color: badgeColor, fontWeight: FontWeight.bold, fontSize: 12),
+                      padding: const EdgeInsets.all(20.0),
+                      borderRadius: 22,
+                      baseColor: isSelected ? ClayColors.goldHighlight : ClayColors.warmGrey,
+                      highlightColor: isSelected ? const Color(0xFFFFFFFF) : ClayColors.highlight,
+                      shadowColor: isSelected ? ClayColors.goldShadow : ClayColors.shadow,
+                      depth: isSelected ? 3 : 6,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: badgeColor.withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(color: badgeColor.withOpacity(0.3), width: 1.0),
+                                ),
+                                child: Text(
+                                  badgeLabel,
+                                  style: GoogleFonts.outfit(
+                                    color: badgeColor, 
+                                    fontWeight: FontWeight.bold, 
+                                    fontSize: 11,
                                   ),
                                 ),
-                                Text(
-                                  model.sizeFormatted,
-                                  style: const TextStyle(color: Colors.grey),
-                                )
-                              ],
+                              ),
+                              Text(
+                                model.sizeFormatted,
+                                style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 13),
+                              )
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          Text(
+                            model.name,
+                            style: GoogleFonts.outfit(
+                              color: isSelected ? ClayColors.goldAccent : ClayColors.textDark, 
+                              fontSize: 18, 
+                              fontWeight: FontWeight.bold,
                             ),
-                            const SizedBox(height: 12),
-                            Text(
-                              model.name,
-                              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              model.description,
-                              style: TextStyle(color: Colors.grey[400], fontSize: 14),
-                            ),
-                            const SizedBox(height: 16),
-                            if (_selectedModelId == model.id)
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            model.description,
+                            style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 13, height: 1.3),
+                          ),
+                          if (isSelected) ...[
+                            const SizedBox(height: 20),
+                            if (_isDownloading && _downloadTaskId != null)
                               Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  if (_isDownloading && _downloadTaskId != null)
-                                    Column(
-                                      children: [
-                                        LinearProgressIndicator(
-                                          value: _downloadProgress / 100,
-                                          backgroundColor: Colors.grey[800],
-                                          color: const Color(0xFFD4AF37),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        Text(
-                                          "${_downloadProgress}% - $downloadStatusText",
-                                          style: const TextStyle(color: Colors.white),
-                                        ),
-                                      ],
-                                    )
-                                  else
-                                    ElevatedButton(
-                                      onPressed: _isDownloading ? null : () => _startDownload(model),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: const Color(0xFFD4AF37),
-                                        foregroundColor: Colors.black,
-                                        minimumSize: const Size(double.infinity, 40),
+                                  ClayProgressBar(
+                                    value: _downloadProgress / 100,
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Center(
+                                    child: Text(
+                                      "$downloadStatusText",
+                                      style: GoogleFonts.outfit(
+                                        color: ClayColors.goldAccent, 
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13,
                                       ),
-                                      child: const Text("Download & Start"),
                                     ),
+                                  ),
                                 ],
                               )
-                          ],
-                        ),
+                            else
+                              ClayButton(
+                                onTap: _isDownloading ? null : () => _startDownload(model),
+                                baseColor: ClayColors.goldAccent,
+                                highlightColor: ClayColors.goldHighlight,
+                                shadowColor: ClayColors.goldShadow,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                child: const Center(
+                                  child: Text(
+                                    "Download & Start",
+                                    style: TextStyle(color: ClayColors.goldHighlight, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                              ),
+                          ]
+                        ],
                       ),
                     ),
                   );
                 },
               ),
             ),
-
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             Center(
               child: Text(
-                "Debug: RAM ${_deviceInfo?.totalRamMB}MB / Avail ${_deviceInfo?.availableRamMB}MB", 
-                style: TextStyle(color: Colors.grey[800], fontSize: 10),
+                "Hardware Specs: Total RAM ${_deviceInfo?.totalRamMB}MB | Free ${_deviceInfo?.availableRamMB}MB", 
+                style: GoogleFonts.outfit(color: ClayColors.textHint, fontSize: 10),
               ),
             ),
           ],
@@ -385,9 +464,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
      await prefs.setString('selected_model_id', model.id);
      await prefs.setString('selected_model_path', path);
      
-     // Initialize Model
+     // Initialize Model — use the EngineRouter (via llmServiceProvider) so
+     // both GGUF and LiteRT models are loaded through the correct engine.
      try {
-       await RunAnywhere().loadModel(path);
+       final llmService = ref.read(llmServiceProvider);
+       await llmService.initialize();
+       await llmService.loadModel(path);
      } catch (e) {
        print("Auto-load failed: $e");
      }

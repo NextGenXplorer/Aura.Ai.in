@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:aura_mobile/data/datasources/llm_service.dart';
 import 'package:aura_mobile/core/providers/ai_providers.dart';
+import 'package:aura_mobile/features/automation/application/automation_engine.dart';
 
 final notificationDigestServiceProvider = Provider((ref) {
   return NotificationDigestService(ref);
@@ -91,7 +92,20 @@ class NotificationDigestService {
   static const _channel = MethodChannel('com.aura.ai/notifications');
   final Ref _ref;
 
-  NotificationDigestService(this._ref);
+  NotificationDigestService(this._ref) {
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'onNotificationReceived') {
+        try {
+          final args = Map<String, dynamic>.from(call.arguments as Map);
+          final appName = args['appName'] as String? ?? '';
+          final text = args['text'] as String? ?? '';
+          _ref.read(automationEngineProvider).checkAndTriggerNotificationFlows(appName, text);
+        } catch (e) {
+          debugPrint('NotificationDigest: Callback error: $e');
+        }
+      }
+    });
+  }
 
   /// Checks whether the NotificationListenerService is enabled in system settings.
   Future<bool> isListenerEnabled() async {

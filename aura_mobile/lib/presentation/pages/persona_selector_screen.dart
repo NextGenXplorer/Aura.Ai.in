@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:aura_mobile/domain/entities/persona.dart';
 import 'package:aura_mobile/presentation/providers/persona_provider.dart';
 import 'package:aura_mobile/presentation/providers/chat_provider.dart';
+import 'package:aura_mobile/presentation/widgets/clay_components.dart';
 
 class PersonaSelectorScreen extends ConsumerWidget {
   const PersonaSelectorScreen({super.key});
@@ -13,28 +14,33 @@ class PersonaSelectorScreen extends ConsumerWidget {
     final personaState = ref.watch(personaProvider);
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0a0a0c),
+      backgroundColor: ClayColors.obsidianBg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0a0a0c),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         title: Text(
           'AI Personas',
-          style: GoogleFonts.outfit(fontWeight: FontWeight.bold, color: const Color(0xFFc69c3a)),
+          style: GoogleFonts.outfit(fontWeight: FontWeight.bold, color: ClayColors.goldAccent),
         ),
-        iconTheme: const IconThemeData(color: Colors.white),
+        iconTheme: const IconThemeData(color: ClayColors.textDark),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: ClayColors.textDark, size: 20),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         children: [
           Text(
             'Choose a personality for AURA',
-            style: GoogleFonts.outfit(color: Colors.white54, fontSize: 14),
+            style: GoogleFonts.outfit(color: ClayColors.textDark, fontSize: 15, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           Text(
             'Each persona changes how AURA responds — from casual friend to strict professor.',
-            style: GoogleFonts.outfit(color: Colors.white30, fontSize: 12, height: 1.4),
+            style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 13, height: 1.4),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 24),
 
           ...personaState.allPersonas.map((persona) {
             final isActive = persona.id == personaState.activePersona.id;
@@ -46,53 +52,54 @@ class PersonaSelectorScreen extends ConsumerWidget {
   }
 
   Widget _personaCard(BuildContext context, WidgetRef ref, Persona persona, bool isActive) {
-    return GestureDetector(
-      onTap: () {
-        // Only act if switching to a different persona
-        if (!isActive) {
-          ref.read(personaProvider.notifier).setPersona(persona.id);
-          // Start a fresh chat so old conversation context doesn't bleed into new persona
-          ref.read(chatProvider.notifier).clearChat();
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Switched to ${persona.name} — new chat started'),
-              duration: const Duration(seconds: 2),
-              backgroundColor: persona.accentColor.withValues(alpha: 0.8),
-            ),
-          );
-          // Go back to chat screen
-          Navigator.pop(context);
-        }
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        margin: const EdgeInsets.only(bottom: 10),
+    final accent = persona.accentColor;
+    final double depth = isActive ? 3.0 : 6.0;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16.0),
+      child: ClayButton(
+        onTap: isActive
+            ? null
+            : () {
+                ref.read(personaProvider.notifier).setPersona(persona.id);
+                // Start a fresh chat so old conversation context doesn't bleed into new persona
+                ref.read(chatProvider.notifier).clearChat();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'Switched to ${persona.name} — new chat started',
+                      style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    duration: const Duration(seconds: 2),
+                    backgroundColor: accent.withOpacity(0.8),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+                // Go back to chat screen
+                Navigator.pop(context);
+              },
+        borderRadius: 24,
+        depth: depth,
+        baseColor: ClayColors.warmGrey,
+        highlightColor: isActive ? accent.withOpacity(0.25) : ClayColors.highlight,
+        shadowColor: isActive ? accent.withOpacity(0.12) : ClayColors.shadow,
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: isActive
-              ? persona.accentColor.withValues(alpha: 0.1)
-              : const Color(0xFF1a1a20),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isActive ? persona.accentColor : Colors.white10,
-            width: isActive ? 2 : 1,
-          ),
-        ),
         child: Row(
           children: [
             // Icon avatar
-            Container(
+            ClayContainer(
               width: 48,
               height: 48,
-              decoration: BoxDecoration(
-                color: persona.accentColor.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: persona.accentColor.withValues(alpha: 0.25)),
-              ),
+              borderRadius: 14,
+              isInset: true,
+              depth: 4.0,
+              baseColor: const Color(0xFFE5E2DA),
+              highlightColor: const Color(0xFFF7F4EF),
+              shadowColor: const Color(0xFFCBC7BE),
               child: Center(
                 child: Icon(
                   persona.icon,
-                  color: persona.accentColor,
+                  color: accent,
                   size: 22,
                 ),
               ),
@@ -109,7 +116,7 @@ class PersonaSelectorScreen extends ConsumerWidget {
                       Text(
                         persona.name,
                         style: GoogleFonts.outfit(
-                          color: isActive ? persona.accentColor : Colors.white,
+                          color: isActive ? accent : ClayColors.textDark,
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
                         ),
@@ -119,13 +126,14 @@ class PersonaSelectorScreen extends ConsumerWidget {
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                           decoration: BoxDecoration(
-                            color: persona.accentColor.withValues(alpha: 0.2),
+                            color: accent.withOpacity(0.15),
                             borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: accent.withOpacity(0.3), width: 1),
                           ),
                           child: Text(
                             'ACTIVE',
                             style: GoogleFonts.outfit(
-                              color: persona.accentColor,
+                              color: accent,
                               fontSize: 9,
                               fontWeight: FontWeight.bold,
                               letterSpacing: 1,
@@ -135,23 +143,25 @@ class PersonaSelectorScreen extends ConsumerWidget {
                       ],
                     ],
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 6),
                   Text(
                     persona.description,
-                    style: GoogleFonts.outfit(color: Colors.white38, fontSize: 12),
+                    style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 12, height: 1.4),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 8),
                   // Preview greeting
-                  Container(
+                  ClayContainer(
+                    isInset: true,
+                    borderRadius: 10,
+                    depth: 2.0,
+                    baseColor: const Color(0xFFE5E2DA),
+                    highlightColor: const Color(0xFFF7F4EF),
+                    shadowColor: const Color(0xFFCBC7BE),
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.04),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
                     child: Text(
                       '"${persona.greeting}"',
                       style: GoogleFonts.outfit(
-                        color: Colors.white24,
+                        color: ClayColors.textMuted,
                         fontSize: 11,
                         fontStyle: FontStyle.italic,
                       ),
@@ -162,11 +172,11 @@ class PersonaSelectorScreen extends ConsumerWidget {
                 ],
               ),
             ),
-
+            const SizedBox(width: 12),
             if (isActive)
-              Icon(Icons.check_circle, color: persona.accentColor, size: 22)
+              Icon(Icons.check_circle_rounded, color: accent, size: 22)
             else
-              const Icon(Icons.circle_outlined, color: Colors.white10, size: 22),
+              Icon(Icons.circle_outlined, color: Colors.black.withOpacity(0.15), size: 22),
           ],
         ),
       ),

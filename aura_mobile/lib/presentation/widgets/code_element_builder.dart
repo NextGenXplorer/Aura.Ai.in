@@ -6,6 +6,7 @@ import 'package:markdown/markdown.dart' as md;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 import 'package:aura_mobile/domain/services/code_execution_service.dart';
+import 'package:aura_mobile/presentation/widgets/clay_components.dart';
 
 final CodeExecutionService _executionService = CodeExecutionService();
 
@@ -24,7 +25,7 @@ Color _langColor(String lang) {
     case 'go': return const Color(0xFF00ADD8);
     case 'swift': return const Color(0xFFFA7343);
     case 'typescript': case 'ts': return const Color(0xFF3178C6);
-    default: return const Color(0xFFc69c3a);
+    default: return const Color(0xFFBC4B2E); // Matches ClayColors.goldAccent terracotta
   }
 }
 
@@ -189,7 +190,7 @@ class _CodeBlockWithPreviewState extends State<_CodeBlockWithPreview> {
 // PREMIUM UI COMPONENTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// The outer card container — premium dark glass effect
+/// The outer card container — premium claymorphic card style
 class _CodeCard extends StatelessWidget {
   final String language;
   final Color langColor;
@@ -206,28 +207,27 @@ class _CodeCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0d0d14),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
-        boxShadow: [
-          BoxShadow(
-            color: langColor.withOpacity(0.06),
-            blurRadius: 20,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(14),
+      margin: const EdgeInsets.symmetric(vertical: 12),
+      child: ClayContainer(
+        borderRadius: 18.0,
+        depth: 6.0,
+        baseColor: ClayColors.warmGrey,
+        highlightColor: ClayColors.highlight,
+        shadowColor: ClayColors.shadow,
+        border: Border.all(
+          color: ClayColors.goldAccent.withOpacity(0.12),
+          width: 1.0,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // Header
             _CardHeader(language: language, langColor: langColor, actions: actions),
-            // Code content
-            child,
+            // Inner content (sunken code body or HTML preview)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: child,
+            ),
           ],
         ),
       ),
@@ -235,7 +235,7 @@ class _CodeCard extends StatelessWidget {
   }
 }
 
-/// Sleek header bar with language label and action buttons
+/// Tactile header bar with language label and action buttons
 class _CardHeader extends StatelessWidget {
   final String language;
   final Color langColor;
@@ -250,14 +250,10 @@ class _CardHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.03),
-        border: Border(bottom: BorderSide(color: Colors.white.withOpacity(0.06))),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Row(
         children: [
-          // Language indicator dot
+          // Language indicator dot with soft glow
           Container(
             width: 8,
             height: 8,
@@ -265,18 +261,22 @@ class _CardHeader extends StatelessWidget {
               color: langColor,
               shape: BoxShape.circle,
               boxShadow: [
-                BoxShadow(color: langColor.withOpacity(0.5), blurRadius: 4),
+                BoxShadow(
+                  color: langColor.withOpacity(0.4),
+                  blurRadius: 4,
+                  spreadRadius: 1,
+                ),
               ],
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
           Text(
-            language == 'plaintext' ? 'Code' : language.toUpperCase(),
+            language == 'plaintext' ? 'CODE' : language.toUpperCase(),
             style: GoogleFonts.outfit(
-              color: Colors.white54,
+              color: ClayColors.textDark,
               fontSize: 11,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.8,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.0,
             ),
           ),
           const Spacer(),
@@ -287,7 +287,7 @@ class _CardHeader extends StatelessWidget {
   }
 }
 
-/// Code text body with horizontal scroll
+/// Code text body with horizontal scroll inside a sunken inset clay container
 class _CodeBody extends StatelessWidget {
   final String code;
 
@@ -295,18 +295,23 @@ class _CodeBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+    return ClayContainer(
+      isInset: true,
+      borderRadius: 12,
+      depth: 3.0,
+      baseColor: const Color(0xFF1E1C1A), // Deep warm clay charcoal
+      highlightColor: const Color(0xFF2C2A28), // Soft top highlight
+      shadowColor: const Color(0xFF121110), // Warm bottom shadow
+      padding: const EdgeInsets.all(14),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Text(
           code,
           style: GoogleFonts.jetBrainsMono(
             fontSize: 12.5,
-            height: 1.7,
-            color: const Color(0xFFE4E4E8),
-            letterSpacing: 0.2,
+            height: 1.6,
+            color: const Color(0xFFF4EDE2), // Soft paper warm white
+            letterSpacing: 0.15,
           ),
         ),
       ),
@@ -314,7 +319,7 @@ class _CodeBody extends StatelessWidget {
   }
 }
 
-/// HTML live preview
+/// HTML live preview on a light-themed inset warm paper container
 class _HtmlPreview extends StatelessWidget {
   final String code;
 
@@ -322,19 +327,23 @@ class _HtmlPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      constraints: const BoxConstraints(minHeight: 120),
+    return ClayContainer(
+      isInset: true,
+      borderRadius: 12,
+      depth: 3.0,
+      baseColor: const Color(0xFFFAF8F5), // Light warm paper white
+      highlightColor: Colors.white,
+      shadowColor: const Color(0xFFE5E0D5),
       padding: const EdgeInsets.all(14),
       child: HtmlWidget(
         code,
-        textStyle: const TextStyle(color: Colors.white),
+        textStyle: GoogleFonts.outfit(color: ClayColors.textDark),
       ),
     );
   }
 }
 
-/// Code execution output panel
+/// Code execution output panel inside a deep sunken inset container
 class _RunOutput extends StatelessWidget {
   final bool isExecuting;
   final String? output;
@@ -351,55 +360,64 @@ class _RunOutput extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
+    return ClayContainer(
+      isInset: true,
+      borderRadius: 12,
+      depth: 3.0,
+      baseColor: const Color(0xFF141312), // Deeper warm sunken black
+      highlightColor: const Color(0xFF201E1D),
+      shadowColor: const Color(0xFF0A0909),
       padding: const EdgeInsets.all(14),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        constraints: const BoxConstraints(minHeight: 60),
-        decoration: BoxDecoration(
-          color: const Color(0xFF080810),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: output == null
-                ? Colors.white.withOpacity(0.06)
-                : (hasError ? Colors.red.withOpacity(0.3) : Colors.green.withOpacity(0.2)),
-          ),
-        ),
-        child: isExecuting
-            ? Row(children: [
+      child: isExecuting
+          ? Row(
+              children: [
                 SizedBox(
-                  width: 14, height: 14,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: langColor),
-                ),
-                const SizedBox(width: 10),
-                Text('Running...',
-                    style: GoogleFonts.jetBrainsMono(fontSize: 12, color: Colors.white38)),
-              ])
-            : output == null
-                ? Row(children: [
-                    Icon(Icons.chevron_right_rounded, color: Colors.white24, size: 16),
-                    const SizedBox(width: 6),
-                    Text('Tap Run to execute',
-                        style: GoogleFonts.jetBrainsMono(fontSize: 12, color: Colors.white24)),
-                  ])
-                : SelectableText(
-                    output!,
-                    style: GoogleFonts.jetBrainsMono(
-                      fontSize: 12.5,
-                      height: 1.6,
-                      color: hasError ? const Color(0xFFFF7B7B) : const Color(0xFF7CFC00),
-                    ),
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2, 
+                    color: langColor,
                   ),
-      ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'Running...',
+                  style: GoogleFonts.jetBrainsMono(
+                    fontSize: 12, 
+                    color: Colors.white.withOpacity(0.4),
+                  ),
+                ),
+              ],
+            )
+          : output == null
+              ? Row(
+                  children: [
+                    Icon(Icons.chevron_right_rounded, color: Colors.white.withOpacity(0.2), size: 16),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Tap Run to execute',
+                      style: GoogleFonts.jetBrainsMono(
+                        fontSize: 12, 
+                        color: Colors.white.withOpacity(0.2),
+                      ),
+                    ),
+                  ],
+                )
+              : SelectableText(
+                  output!,
+                  style: GoogleFonts.jetBrainsMono(
+                    fontSize: 12.5,
+                    height: 1.6,
+                    color: hasError ? const Color(0xFFFF8B8B) : const Color(0xFF90FF90),
+                  ),
+                ),
     );
   }
 }
 
 // ── Action Buttons ────────────────────────────────────────────────────────────
 
-/// Minimal copy button
+/// Tactile copy button using ClayButton
 class _CopyButton extends StatelessWidget {
   final bool copied;
   final VoidCallback onTap;
@@ -408,41 +426,42 @@ class _CopyButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    final Color buttonColor = copied ? ClayColors.greenAccent : ClayColors.textMuted;
+    final Color highlightColor = copied ? ClayColors.greenHighlight : const Color(0xFFFDFCF9);
+    final Color shadowColor = copied ? ClayColors.greenShadow : ClayColors.shadow;
+
+    return ClayButton(
       onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: copied ? Colors.green.withOpacity(0.15) : Colors.white.withOpacity(0.05),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: copied ? Colors.green.withOpacity(0.3) : Colors.white.withOpacity(0.1)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              copied ? Icons.check_rounded : Icons.content_copy_rounded,
-              size: 13,
-              color: copied ? Colors.green : Colors.white54,
+      borderRadius: 8.0,
+      depth: 2.0,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      baseColor: copied ? const Color(0xFFE8F5E9) : ClayColors.warmGrey,
+      highlightColor: highlightColor,
+      shadowColor: shadowColor,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            copied ? Icons.check_rounded : Icons.content_copy_rounded,
+            size: 12,
+            color: buttonColor,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            copied ? 'Copied' : 'Copy',
+            style: GoogleFonts.outfit(
+              fontSize: 10.5,
+              color: buttonColor,
+              fontWeight: FontWeight.bold,
             ),
-            const SizedBox(width: 4),
-            Text(
-              copied ? 'Copied' : 'Copy',
-              style: GoogleFonts.outfit(
-                fontSize: 11,
-                color: copied ? Colors.green : Colors.white54,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 }
 
-/// Run / Preview button
+/// Tactile run / preview button using ClayButton
 class _RunButton extends StatelessWidget {
   final bool isRunning;
   final bool isShowingResult;
@@ -465,30 +484,33 @@ class _RunButton extends StatelessWidget {
         ? Icons.code_rounded
         : (isHtml ? Icons.visibility_rounded : Icons.play_arrow_rounded);
 
-    return GestureDetector(
+    final Color base = isShowingResult ? ClayColors.warmGrey : ClayColors.goldHighlight;
+    final Color highlight = isShowingResult ? ClayColors.highlight : const Color(0xFFFFF7F5);
+    final Color shadow = isShowingResult ? ClayColors.shadow : ClayColors.goldShadow;
+    final Color textColor = isShowingResult ? ClayColors.textMuted : ClayColors.goldAccent;
+
+    return ClayButton(
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: langColor.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: langColor.withOpacity(0.3)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 13, color: langColor),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: GoogleFonts.outfit(
-                fontSize: 11,
-                color: langColor,
-                fontWeight: FontWeight.w600,
-              ),
+      borderRadius: 8.0,
+      depth: 2.0,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      baseColor: base,
+      highlightColor: highlight,
+      shadowColor: shadow,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: textColor),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: GoogleFonts.outfit(
+              fontSize: 10.5,
+              color: textColor,
+              fontWeight: FontWeight.bold,
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

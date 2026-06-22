@@ -35,11 +35,11 @@ class ContextBuilderService {
   }) async {
     final buffer = StringBuffer();
 
-    // 1. System Instruction — shorter for small models, detailed for large
-    if (modelTier.isSmall) {
+    // 1. System Instruction — short for small/medium models, detailed for large
+    if (modelTier.isSmall || modelTier == ModelTier.medium) {
       final basePrompt = personaSystemPrompt ??
           "You are AURA, a helpful AI assistant.";
-      buffer.writeln("$basePrompt Answer naturally. If context is provided below, use it. If not, just respond helpfully. STOP after answering. Do NOT continue with unrelated topics.");
+      buffer.writeln("$basePrompt Be concise. Answer the user's question and stop. Never repeat yourself or add extra content.");
     } else {
       final basePrompt = personaSystemPrompt ??
           "You are AURA, a privacy-first offline AI assistant. Answer concisely and helpfully.";
@@ -53,11 +53,11 @@ class ContextBuilderService {
           "6. Never generate text like 'Human:', 'User:', or fake conversation turns.");
     }
 
-    // 2. Memory Context — fewer for small models to save context window
+    // 2. Memory Context — fewer for small/medium models to save context window
     if (includeMemories) {
       final memories = await _getMemoriesCached(userMessage);
       if (memories.isNotEmpty) {
-        final limit = modelTier.isSmall ? 2 : 3;
+        final limit = (modelTier.isSmall || modelTier == ModelTier.medium) ? 2 : 3;
         final topMemories = memories.take(limit).toList();
         buffer.writeln("\nMemories:");
         for (var mem in topMemories) {
@@ -66,11 +66,11 @@ class ContextBuilderService {
       }
     }
 
-    // 3. Document Context — fewer chunks for small models
+    // 3. Document Context — fewer chunks for small/medium models
     if (includeDocuments) {
       final docContext = await _documentService.retrieveRelevantContext(userMessage);
       if (docContext.isNotEmpty) {
-        final limit = modelTier.isSmall ? 1 : 2;
+        final limit = (modelTier.isSmall || modelTier == ModelTier.medium) ? 1 : 2;
         final topDocs = docContext.take(limit).toList();
         buffer.writeln("\nDocument Context:");
         for (var chunk in topDocs) {
@@ -79,10 +79,14 @@ class ContextBuilderService {
       }
     }
 
-    // 4. Chat History — less history for small models to save context window
+    // 4. Chat History — fewer turns for small/medium models to save context window.
+    // With the 4096-token context window the engines now use, larger models can
+    // retain a much longer conversation for coherent multi-turn memory.
     if (chatHistory.isNotEmpty) {
-      final historyLimit = modelTier.isSmall ? 2 : 3;
-      buffer.writeln("\n--- PREVIOUS CONVERSATION CONTEXT (Do not repeat previous answers) ---");
+      // Small/medium (0.5B/1.5B): keep only last 4 turns — history beyond that
+      // overflows their effective context and causes repetition/hallucination.
+      final historyLimit = (modelTier.isSmall || modelTier == ModelTier.medium) ? 4 : 10;
+      buffer.writeln("\n--- PREVIOUS CONVERSATION (do not repeat) ---");
       final limitedHistory = chatHistory.length > historyLimit
           ? chatHistory.sublist(chatHistory.length - historyLimit)
           : chatHistory;
@@ -90,7 +94,7 @@ class ContextBuilderService {
       for (var msg in limitedHistory) {
         buffer.writeln(msg);
       }
-      buffer.writeln("--- END OF PREVIOUS CONVERSATION ---\n");
+      buffer.writeln("--- END ---\n");
     }
 
     buffer.writeln("CURRENT USER REQUEST: \"$userMessage\"");

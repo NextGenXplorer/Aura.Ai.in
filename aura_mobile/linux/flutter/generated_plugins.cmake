@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   audioplayers_linux
   disk_space_2
   file_selector_linux
+  flutter_gemma
   url_launcher_linux
 )
 

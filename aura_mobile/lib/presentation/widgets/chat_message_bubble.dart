@@ -3,6 +3,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:aura_mobile/presentation/widgets/code_element_builder.dart';
+import 'package:aura_mobile/presentation/widgets/clay_components.dart';
 
 /// Extracted user message bubble — const-constructable, avoids full list rebuild.
 class UserMessageBubble extends StatelessWidget {
@@ -14,34 +15,42 @@ class UserMessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     return Align(
       alignment: Alignment.centerRight,
-      child: Container(
-        margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
-        decoration: BoxDecoration(
-          color: const Color(0xFF2a2a30),
-          borderRadius: BorderRadius.circular(20).copyWith(bottomRight: Radius.zero),
-          border: Border.all(color: const Color(0xFFc69c3a).withOpacity(0.3)),
-        ),
-        child: MarkdownBody(
-          data: content,
-          styleSheet: MarkdownStyleSheet(
-            p: TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              height: 1.5,
-              fontFamily: GoogleFonts.outfit().fontFamily,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+        child: Container(
+          constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
+          child: ClayContainer(
+            borderRadius: 22,
+            depth: 5.0,
+            baseColor: const Color(0xFFEBE8E0), // Soft warm cream/grey
+            highlightColor: const Color(0xFFFFFFFF),
+            shadowColor: const Color(0xFFD6CDBB),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            border: Border.all(
+              color: ClayColors.goldAccent.withOpacity(0.18),
+              width: 1.0,
             ),
-            strong: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-            a: const TextStyle(color: Color(0xFFc69c3a), decoration: TextDecoration.underline),
-            code: const TextStyle(
-              color: Color(0xFFe6cf8e),
-              backgroundColor: Color(0xFF1a1a20),
-              fontFamily: 'monospace',
-              fontSize: 14,
+            child: MarkdownBody(
+              data: content,
+              styleSheet: MarkdownStyleSheet(
+                p: TextStyle(
+                  color: ClayColors.textDark,
+                  fontSize: 15,
+                  height: 1.5,
+                  fontFamily: GoogleFonts.outfit().fontFamily,
+                ),
+                strong: const TextStyle(color: ClayColors.textDark, fontWeight: FontWeight.bold),
+                a: const TextStyle(color: ClayColors.goldAccent, decoration: TextDecoration.underline),
+                code: const TextStyle(
+                  color: Color(0xFFe6cf8e),
+                  backgroundColor: Color(0xFF1a1a20),
+                  fontFamily: 'monospace',
+                  fontSize: 14,
+                ),
+              ),
+              selectable: true,
             ),
           ),
-          selectable: true,
         ),
       ),
     );
@@ -76,13 +85,13 @@ class AssistantMessageBubble extends StatelessWidget {
               builders: {'code': CodeElementBuilder(context)},
               styleSheet: MarkdownStyleSheet(
                 p: TextStyle(
-                  color: Colors.white.withOpacity(0.9),
-                  fontSize: 16,
+                  color: ClayColors.textDark,
+                  fontSize: 15,
                   height: 1.5,
                   fontFamily: GoogleFonts.outfit().fontFamily,
                 ),
-                strong: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                a: const TextStyle(color: Color(0xFFc69c3a), decoration: TextDecoration.underline),
+                strong: const TextStyle(color: ClayColors.textDark, fontWeight: FontWeight.bold),
+                a: const TextStyle(color: ClayColors.goldAccent, decoration: TextDecoration.underline),
                 code: const TextStyle(
                   color: Color(0xFFe6cf8e),
                   backgroundColor: Color(0xFF1a1a20),
@@ -109,16 +118,27 @@ class AssistantMessageBubble extends StatelessWidget {
           ),
         if (options.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
+            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8, top: 12),
             child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
+              spacing: 10,
+              runSpacing: 10,
               children: options.map((opt) {
-                return ActionChip(
-                  label: Text(opt['label']!, style: GoogleFonts.outfit(color: Colors.white)),
-                  backgroundColor: const Color(0xFF2a2a30),
-                  side: const BorderSide(color: Color(0xFFc69c3a)),
-                  onPressed: () => onOptionSelected(opt['value']!),
+                return ClayButton(
+                  onTap: () => onOptionSelected(opt['value']!),
+                  borderRadius: 14,
+                  depth: 4,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  baseColor: ClayColors.warmGrey,
+                  highlightColor: ClayColors.highlight,
+                  shadowColor: ClayColors.shadow,
+                  child: Text(
+                    opt['label']!,
+                    style: GoogleFonts.outfit(
+                      color: ClayColors.textDark, 
+                      fontSize: 13, 
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 );
               }).toList(),
             ),

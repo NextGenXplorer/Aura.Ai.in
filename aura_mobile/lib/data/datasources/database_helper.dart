@@ -20,7 +20,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 4,
+      version: 7,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -63,6 +63,25 @@ class DatabaseHelper {
 
     // Study Buddy tables
     await _createStudyTables(db);
+
+    // Automation rules table
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS automation_rules(
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        triggerType TEXT NOT NULL,
+        scheduledTime INTEGER,
+        repeatIntervalMinutes INTEGER,
+        condition TEXT,
+        checkIntervalMinutes INTEGER DEFAULT 60,
+        actionInstruction TEXT NOT NULL,
+        actionJson TEXT,
+        isEnabled INTEGER DEFAULT 1,
+        lastExecutedAt INTEGER,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+      )
+    ''');
   }
 
   Future<void> _createStudyTables(Database db) async {
@@ -172,6 +191,33 @@ class DatabaseHelper {
 
     if (oldVersion < 4) {
       await _createStudyTables(db);
+    }
+
+    if (oldVersion < 5) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS automation_rules(
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          triggerType TEXT NOT NULL,
+          scheduledTime INTEGER,
+          repeatIntervalMinutes INTEGER,
+          condition TEXT,
+          checkIntervalMinutes INTEGER DEFAULT 60,
+          actionInstruction TEXT NOT NULL,
+          isEnabled INTEGER DEFAULT 1,
+          lastExecutedAt INTEGER,
+          createdAt INTEGER NOT NULL,
+          updatedAt INTEGER NOT NULL
+        )
+      ''');
+    }
+
+    if (oldVersion < 7) {
+      try {
+        await db.execute('ALTER TABLE automation_rules ADD COLUMN actionJson TEXT');
+      } catch (e) {
+        // Safe guard in case column already exists
+      }
     }
   }
 }

@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:aura_mobile/domain/entities/flashcard.dart';
 import 'package:aura_mobile/domain/entities/quiz.dart';
 import 'package:aura_mobile/presentation/providers/study_provider.dart';
+import 'package:aura_mobile/presentation/widgets/clay_components.dart';
 
 class QuizScreen extends ConsumerStatefulWidget {
   final FlashcardDeck deck;
@@ -45,7 +46,7 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
 
     if (state.quizQuestions.isEmpty) {
       return _scaffold(Center(
-        child: Text('Not enough cards for a quiz', style: GoogleFonts.outfit(color: Colors.white54)),
+        child: Text('Not enough cards for a quiz', style: GoogleFonts.outfit(color: ClayColors.textMuted)),
       ));
     }
 
@@ -60,13 +61,14 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
 
   Widget _scaffold(Widget body) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0a0a0c),
+      backgroundColor: ClayColors.obsidianBg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0a0a0c),
-        title: Text('Quiz', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold)),
-        iconTheme: const IconThemeData(color: Colors.white),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: Text('Quiz', style: GoogleFonts.outfit(color: ClayColors.textDark, fontWeight: FontWeight.bold)),
+        iconTheme: const IconThemeData(color: ClayColors.textDark),
         leading: IconButton(
-          icon: const Icon(Icons.close),
+          icon: const Icon(Icons.close_rounded),
           onPressed: () {
             ref.read(studyProvider.notifier).clearQuiz();
             Navigator.pop(context);
@@ -84,11 +86,11 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
     return Column(
       children: [
         // Progress
-        LinearProgressIndicator(
-          value: current / total,
-          backgroundColor: Colors.white10,
-          valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFc69c3a)),
-          minHeight: 3,
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8.0),
+          child: ClayProgressBar(
+            value: total > 0 ? current / total : 0,
+          ),
         ),
 
         Expanded(
@@ -98,34 +100,31 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
               // Question counter
               Text(
                 'Question $current of $total',
-                style: GoogleFonts.outfit(color: Colors.white38, fontSize: 13),
+                style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 13, fontWeight: FontWeight.w600),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
 
               // Score so far
               Row(
                 children: [
-                  _scoreChip('${state.quizCorrect}', Colors.greenAccent),
+                  _scoreChip('${state.quizCorrect}', ClayColors.greenAccent),
                   const SizedBox(width: 8),
-                  _scoreChip('${state.quizWrong}', Colors.redAccent),
+                  _scoreChip('${state.quizWrong}', ClayColors.redAccent),
                 ],
               ),
               const SizedBox(height: 24),
 
               // Question
-              Container(
+              ClayContainer(
+                borderRadius: 24,
+                depth: 6.0,
                 padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1a1a20),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFFc69c3a).withValues(alpha: 0.2)),
-                ),
                 child: Text(
                   question.question,
-                  style: GoogleFonts.outfit(color: Colors.white, fontSize: 18, height: 1.5),
+                  style: GoogleFonts.outfit(color: ClayColors.textDark, fontSize: 17, height: 1.5, fontWeight: FontWeight.bold),
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 28),
 
               // Answer area
               if (question.type == 'multiple_choice' && question.options != null)
@@ -133,7 +132,7 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
               else
                 _fillBlankInput(question),
 
-              const SizedBox(height: 16),
+              const SizedBox(height: 20),
 
               // Feedback after answering
               if (_answered) _feedbackSection(question),
@@ -144,19 +143,18 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
         // Next button
         if (_answered)
           Padding(
-            padding: const EdgeInsets.all(16),
-            child: SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _nextQuestion,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFc69c3a),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            child: ClayButton(
+              onTap: _nextQuestion,
+              baseColor: ClayColors.goldAccent,
+              highlightColor: ClayColors.goldHighlight,
+              shadowColor: ClayColors.goldShadow,
+              borderRadius: 18,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Center(
                 child: Text(
                   state.currentQuizIndex + 1 >= state.quizQuestions.length ? 'See Results' : 'Next Question',
-                  style: GoogleFonts.outfit(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 16),
+                  style: GoogleFonts.outfit(color: ClayColors.goldHighlight, fontWeight: FontWeight.bold, fontSize: 16),
                 ),
               ),
             ),
@@ -191,57 +189,62 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
   }) {
     final isSelected = _selectedIndex == index;
 
-    Color borderColor = Colors.white10;
-    Color bgColor = const Color(0xFF1a1a20);
+    Color baseColor = ClayColors.warmGrey;
+    Color highlightColor = ClayColors.highlight;
+    Color shadowColor = ClayColors.shadow;
     IconData? trailingIcon;
     Color? iconColor;
 
     if (_answered) {
       if (isCorrectOption) {
-        // Always highlight the correct answer in green
-        borderColor = Colors.greenAccent;
-        bgColor = Colors.greenAccent.withValues(alpha: 0.1);
-        trailingIcon = Icons.check_circle;
-        iconColor = Colors.greenAccent;
+        // Correct answer highlighted in green
+        baseColor = ClayColors.greenAccent.withOpacity(0.12);
+        highlightColor = ClayColors.greenHighlight;
+        shadowColor = ClayColors.greenShadow;
+        trailingIcon = Icons.check_circle_rounded;
+        iconColor = ClayColors.greenAccent;
       } else if (isSelected) {
-        // Selected but wrong — show red
-        borderColor = Colors.redAccent;
-        bgColor = Colors.redAccent.withValues(alpha: 0.1);
-        trailingIcon = Icons.cancel;
-        iconColor = Colors.redAccent;
+        // Selected wrong highlighted in red
+        baseColor = ClayColors.redAccent.withOpacity(0.12);
+        highlightColor = ClayColors.redHighlight;
+        shadowColor = ClayColors.redShadow;
+        trailingIcon = Icons.cancel_rounded;
+        iconColor = ClayColors.redAccent;
       }
-      // Non-selected, non-correct options stay neutral
     } else if (isSelected) {
-      borderColor = const Color(0xFFc69c3a);
-      bgColor = const Color(0xFFc69c3a).withValues(alpha: 0.1);
+      baseColor = ClayColors.goldAccent.withOpacity(0.12);
+      highlightColor = ClayColors.goldHighlight;
+      shadowColor = ClayColors.goldShadow;
     }
 
-    return GestureDetector(
-      onTap: _answered
-          ? null
-          : () {
-              _submitMCAnswer(option, index, question);
-            },
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: bgColor,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: borderColor),
-        ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12.0),
+      child: ClayButton(
+        onTap: _answered
+            ? null
+            : () {
+                _submitMCAnswer(option, index, question);
+              },
+        borderRadius: 18,
+        depth: isSelected ? 3.0 : 6.0,
+        baseColor: baseColor,
+        highlightColor: highlightColor,
+        shadowColor: shadowColor,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
         child: Row(
           children: [
             Expanded(
               child: Text(
                 option,
-                style: GoogleFonts.outfit(color: Colors.white, fontSize: 14),
+                style: GoogleFonts.outfit(color: ClayColors.textDark, fontSize: 14, fontWeight: FontWeight.w600),
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            if (trailingIcon != null)
+            if (trailingIcon != null) ...[
+              const SizedBox(width: 8),
               Icon(trailingIcon, color: iconColor, size: 20),
+            ],
           ],
         ),
       ),
@@ -250,46 +253,27 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
 
   Widget _fillBlankInput(QuizQuestion question) {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        TextField(
+        ClayTextField(
           controller: _fillBlankCtrl,
           enabled: !_answered,
-          style: GoogleFonts.outfit(color: Colors.white),
-          decoration: InputDecoration(
-            hintText: 'Type your answer...',
-            hintStyle: GoogleFonts.outfit(color: Colors.white30),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: Colors.white24),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: Color(0xFFc69c3a)),
-            ),
-            disabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(
-                color: _answered
-                    ? (_wasCorrect ? Colors.greenAccent : Colors.redAccent)
-                    : Colors.white10,
-              ),
-            ),
-          ),
+          hintText: 'Type your answer...',
+          prefixIcon: Icons.edit_note_rounded,
         ),
         if (!_answered) ...[
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _fillBlankCtrl.text.trim().isEmpty
-                  ? null
-                  : () => _submitFillBlank(_fillBlankCtrl.text.trim(), question),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFc69c3a),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              child: Text('Submit', style: GoogleFonts.outfit(color: Colors.black, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 16),
+          ClayButton(
+            onTap: _fillBlankCtrl.text.trim().isEmpty
+                ? null
+                : () => _submitFillBlank(_fillBlankCtrl.text.trim(), question),
+            baseColor: ClayColors.goldAccent,
+            highlightColor: ClayColors.goldHighlight,
+            shadowColor: ClayColors.goldShadow,
+            borderRadius: 16,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: const Center(
+              child: Text('Submit', style: TextStyle(color: ClayColors.goldHighlight, fontWeight: FontWeight.bold)),
             ),
           ),
         ],
@@ -298,46 +282,44 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
   }
 
   Widget _feedbackSection(QuizQuestion question) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _wasCorrect
-            ? Colors.greenAccent.withValues(alpha: 0.1)
-            : Colors.redAccent.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: _wasCorrect
-              ? Colors.greenAccent.withValues(alpha: 0.3)
-              : Colors.redAccent.withValues(alpha: 0.3),
-        ),
-      ),
+    final themeColor = _wasCorrect ? ClayColors.greenAccent : ClayColors.redAccent;
+
+    return ClayContainer(
+      borderRadius: 20,
+      depth: 4.0,
+      baseColor: themeColor.withOpacity(0.08),
+      highlightColor: ClayColors.highlight,
+      shadowColor: ClayColors.shadow,
+      border: Border.all(color: themeColor.withOpacity(0.3), width: 1.0),
+      padding: const EdgeInsets.all(18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               Icon(
-                _wasCorrect ? Icons.check_circle : Icons.cancel,
-                color: _wasCorrect ? Colors.greenAccent : Colors.redAccent,
+                _wasCorrect ? Icons.check_circle_rounded : Icons.cancel_rounded,
+                color: themeColor,
                 size: 20,
               ),
               const SizedBox(width: 8),
               Text(
                 _wasCorrect ? 'Correct!' : 'Incorrect',
                 style: GoogleFonts.outfit(
-                  color: _wasCorrect ? Colors.greenAccent : Colors.redAccent,
+                  color: themeColor,
                   fontWeight: FontWeight.bold,
+                  fontSize: 15,
                 ),
               ),
             ],
           ),
           if (!_wasCorrect) ...[
-            const SizedBox(height: 8),
-            Text('Correct answer:', style: GoogleFonts.outfit(color: Colors.white38, fontSize: 12)),
+            const SizedBox(height: 12),
+            Text('Correct answer:', style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 12, fontWeight: FontWeight.w600)),
             const SizedBox(height: 4),
             Text(
               question.correctAnswer,
-              style: GoogleFonts.outfit(color: Colors.white, fontSize: 14),
+              style: GoogleFonts.outfit(color: ClayColors.textDark, fontSize: 14, fontWeight: FontWeight.bold),
             ),
           ],
         ],
@@ -347,12 +329,16 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
 
   Widget _scoreChip(String value, Color color) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
+        color: color.withOpacity(0.12),
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.3), width: 1.0),
       ),
-      child: Text(value, style: GoogleFonts.outfit(color: color, fontSize: 13, fontWeight: FontWeight.bold)),
+      child: Text(
+        value, 
+        style: GoogleFonts.outfit(color: color, fontSize: 13, fontWeight: FontWeight.bold),
+      ),
     );
   }
 
@@ -448,15 +434,15 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
     IconData icon;
 
     if (percentage >= 80) {
-      scoreColor = Colors.greenAccent;
+      scoreColor = ClayColors.greenAccent;
       message = 'Excellent work!';
       icon = Icons.star_rounded;
     } else if (percentage >= 60) {
-      scoreColor = Colors.orangeAccent;
+      scoreColor = ClayColors.orangeAccent;
       message = 'Good effort! Keep studying.';
       icon = Icons.thumb_up_rounded;
     } else {
-      scoreColor = Colors.redAccent;
+      scoreColor = ClayColors.redAccent;
       message = 'Keep practicing! You\'ll get there.';
       icon = Icons.refresh_rounded;
     }
@@ -464,69 +450,84 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 100,
-              height: 100,
-              decoration: BoxDecoration(
-                color: scoreColor.withValues(alpha: 0.15),
-                shape: BoxShape.circle,
+        child: ClayContainer(
+          borderRadius: 28,
+          depth: 8.0,
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              ClayContainer(
+                width: 80,
+                height: 80,
+                borderRadius: 40,
+                depth: 4.0,
+                baseColor: scoreColor.withOpacity(0.15),
+                highlightColor: ClayColors.highlight,
+                shadowColor: ClayColors.shadow,
+                child: Icon(icon, color: scoreColor, size: 40),
               ),
-              child: Icon(icon, color: scoreColor, size: 50),
-            ),
-            const SizedBox(height: 24),
-            Text('$percentage%', style: GoogleFonts.outfit(color: scoreColor, fontSize: 48, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Text(message, style: GoogleFonts.outfit(color: Colors.white54, fontSize: 16)),
-            const SizedBox(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _resultStat('Correct', '$correct', Colors.greenAccent),
-                const SizedBox(width: 24),
-                _resultStat('Wrong', '${state.quizWrong}', Colors.redAccent),
-                const SizedBox(width: 24),
-                _resultStat('Total', '$total', Colors.white54),
-              ],
-            ),
-            const SizedBox(height: 40),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                OutlinedButton(
-                  onPressed: () {
-                    ref.read(studyProvider.notifier).clearQuiz();
-                    ref.read(studyProvider.notifier).startQuiz();
-                    setState(() {
-                      _selectedIndex = null;
-                      _answered = false;
-                      _wasCorrect = false;
-                      _questionStartTime = DateTime.now();
-                    });
-                  },
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Color(0xFFc69c3a)),
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              const SizedBox(height: 24),
+              Text(
+                '$percentage%', 
+                style: GoogleFonts.outfit(color: scoreColor, fontSize: 44, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                message, 
+                style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 15, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 28),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _resultStat('Correct', '$correct', ClayColors.greenAccent),
+                  const SizedBox(width: 28),
+                  _resultStat('Wrong', '${state.quizWrong}', ClayColors.redAccent),
+                  const SizedBox(width: 28),
+                  _resultStat('Total', '$total', ClayColors.textDark),
+                ],
+              ),
+              const SizedBox(height: 36),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ClayButton(
+                    onTap: () {
+                      ref.read(studyProvider.notifier).clearQuiz();
+                      ref.read(studyProvider.notifier).startQuiz();
+                      setState(() {
+                        _selectedIndex = null;
+                        _answered = false;
+                        _wasCorrect = false;
+                        _questionStartTime = DateTime.now();
+                      });
+                    },
+                    borderRadius: 16,
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    baseColor: ClayColors.warmGrey,
+                    highlightColor: ClayColors.highlight,
+                    shadowColor: ClayColors.shadow,
+                    child: Text('Try Again', style: GoogleFonts.outfit(color: ClayColors.goldAccent, fontWeight: FontWeight.bold)),
                   ),
-                  child: Text('Try Again', style: GoogleFonts.outfit(color: const Color(0xFFc69c3a))),
-                ),
-                const SizedBox(width: 12),
-                ElevatedButton(
-                  onPressed: () {
-                    ref.read(studyProvider.notifier).clearQuiz();
-                    Navigator.pop(context);
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFc69c3a),
+                  const SizedBox(width: 16),
+                  ClayButton(
+                    onTap: () {
+                      ref.read(studyProvider.notifier).clearQuiz();
+                      Navigator.pop(context);
+                    },
+                    borderRadius: 16,
                     padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    baseColor: ClayColors.goldAccent,
+                    highlightColor: ClayColors.goldHighlight,
+                    shadowColor: ClayColors.goldShadow,
+                    child: Text('Done', style: GoogleFonts.outfit(color: ClayColors.goldHighlight, fontWeight: FontWeight.bold)),
                   ),
-                  child: Text('Done', style: GoogleFonts.outfit(color: Colors.black, fontWeight: FontWeight.bold)),
-                ),
-              ],
-            ),
-          ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -536,7 +537,7 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
     return Column(
       children: [
         Text(value, style: GoogleFonts.outfit(color: color, fontSize: 24, fontWeight: FontWeight.bold)),
-        Text(label, style: GoogleFonts.outfit(color: Colors.white38, fontSize: 12)),
+        Text(label, style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 12)),
       ],
     );
   }
