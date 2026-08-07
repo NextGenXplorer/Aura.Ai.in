@@ -55,6 +55,10 @@ class TtsManager(context: Context, private val onInitCompleted: () -> Unit) : Te
         if (isInitialized) {
             val id = utteranceId ?: "utt_${utteranceCounter++}"
             lastSpokenLength = text.length
+            // Track this utterance so onAllSpoken() fires for flushed speech too.
+            // Without it the completion callback could wait on a stale id and the
+            // assistant would never reopen the microphone.
+            lastQueuedId = id
             tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
         }
     }

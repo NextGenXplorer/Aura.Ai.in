@@ -18,11 +18,51 @@ import com.aura.mobile.aura_mobile.assistant.ReminderModel
 import com.aura.mobile.aura_mobile.assistant.ReminderRepository
 import com.aura.mobile.aura_mobile.assistant.ClipboardMonitorService
 import com.aura.mobile.aura_mobile.assistant.ScreenContextAccessibilityService
+import com.aura.mobile.aura_mobile.assistant.AgentActionSurface
 import com.aura.mobile.aura_mobile.assistant.AuraNotificationListenerService
+import com.aura.mobile.aura_mobile.brain.AuraBrainRuntimeBridge
 
 class MainActivity: FlutterActivity() {
     companion object {
+        const val ACTION_OPEN_BRAIN_SETUP =
+            "com.aura.mobile.aura_mobile.action.OPEN_BRAIN_SETUP"
+        const val EXTRA_BRAIN_DESTINATION = "destination"
+        const val BRAIN_DESTINATION_MODEL_SETUP = "modelSetup"
+
+        /**
+         * Extra set by the Quick Settings tile to ask the app to turn the voice
+         * assistant on. Starting a microphone foreground service directly from a
+         * tile is blocked on Android 12+, so the tile brings the activity to the
+         * foreground and we start the service once resumed (a valid state).
+         */
+        const val EXTRA_START_ASSISTANT = "start_assistant"
+
         var pendingProcessTextQuery: String? = null
+        var pendingShareContent: String? = null
+
+        /**
+         * Destination requested by a home screen widget tap.
+         *
+         * Stored rather than delivered directly because a widget can cold-start
+         * the app, in which case the Dart side is not listening yet. Flutter
+         * polls this on startup and on resume.
+         */
+        var pendingWidgetRoute: String? = null
+
+        /** Routes a widget is allowed to request. */
+        private val ALLOWED_WIDGET_ROUTES = setOf(
+            "chat",
+            "voice",
+            "camera_scan",
+            "image_studio",
+            "daily_briefing",
+            "study_dashboard",
+            "flashcard_review",
+            "quiz"
+        )
+
+        fun isAllowedWidgetRoute(route: String?): Boolean =
+            route != null && ALLOWED_WIDGET_ROUTES.contains(route)
     }
 
     private val CHANNEL = "com.aura.ai/memory"
@@ -32,12 +72,25 @@ class MainActivity: FlutterActivity() {
     private val CLIPBOARD_CHANNEL = "com.aura.ai/clipboard"
     private val SCREEN_CONTEXT_CHANNEL = "com.aura.ai/screen_context"
     private val NOTIFICATIONS_CHANNEL = "com.aura.ai/notifications"
+    private val SHARE_CHANNEL = "com.aura.mobile/share"
+    private val WIDGET_CHANNEL = "com.aura.mobile/widget"
+    // Interactive Agent Mode (additive): action + query surface channel.
+    private val AGENT_CONTROL_CHANNEL = "com.aura.ai/agent_control"
 
     private var assistantStateSink: EventChannel.EventSink? = null
     private var assistantAiChannel: MethodChannel? = null
     private var clipboardChannel: MethodChannel? = null
     private var screenContextChannel: MethodChannel? = null
     private var notificationsChannel: MethodChannel? = null
+    private var agentControlChannel: MethodChannel? = null
+    private var shareChannel: MethodChannel? = null
+    private var widgetChannel: MethodChannel? = null
+
+    /** Set when a QS-tile launch asks us to start the assistant once resumed. */
+    private var pendingStartAssistant = false
+
+    /** Tracks whether we are in the resumed (foreground) state. */
+    private var isActivityResumed = false
 
     private val assistantStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -83,16 +136,63 @@ class MainActivity: FlutterActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleProcessTextIntent(intent)
+        // If the activity is already in the foreground (e.g. tile tapped while
+        // the app is open), onResume will not fire, so start here instead.
+        if (pendingStartAssistant && isActivityResumed) {
+            pendingStartAssistant = false
+            startAssistantForeground()
+        }
     }
 
     private fun handleProcessTextIntent(intent: Intent?) {
         if (intent == null) return
-        if (Intent.ACTION_PROCESS_TEXT == intent.action) {
+
+        // Quick Settings tile asked us to turn the assistant on. Defer the
+        // actual service start to onResume, when the activity is in a foreground
+        // state that permits starting a microphone foreground service.
+        if (intent.getBooleanExtra(EXTRA_START_ASSISTANT, false)) {
+            intent.removeExtra(EXTRA_START_ASSISTANT)
+            pendingStartAssistant = true
+        }
+
+        // A widget tap arrives on the normal launch intent, so check the extra
+        // before branching on the action. Unknown values are dropped so an
+        // external app cannot drive arbitrary navigation.
+        val widgetRoute = intent.getStringExtra(
+            com.aura.mobile.aura_mobile.widget.WidgetPrefs.EXTRA_ROUTE
+        )
+        if (widgetRoute != null) {
+            intent.removeExtra(com.aura.mobile.aura_mobile.widget.WidgetPrefs.EXTRA_ROUTE)
+            if (isAllowedWidgetRoute(widgetRoute)) {
+                pendingWidgetRoute = widgetRoute
+                deliverPendingWidgetRoute()
+            } else {
+                Log.w("AuraMainActivity", "Rejected unknown widget route: $widgetRoute")
+            }
+        }
+
+        if (ACTION_OPEN_BRAIN_SETUP == intent.action) {
+            val destination = intent.getStringExtra(EXTRA_BRAIN_DESTINATION)
+            val hasUntrustedData = intent.data != null || intent.clipData != null
+            if (destination == BRAIN_DESTINATION_MODEL_SETUP && !hasUntrustedData) {
+                AuraBrainRuntimeBridge.requestOpenSetup()
+            } else {
+                Log.w("AuraMainActivity", "Rejected invalid Brain setup intent")
+            }
+        } else if (Intent.ACTION_PROCESS_TEXT == intent.action) {
             val selectedText = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
             if (selectedText != null && selectedText.isNotEmpty()) {
                 Log.d("AuraMainActivity", "PROCESS_TEXT received: $selectedText")
                 pendingProcessTextQuery = selectedText
                 deliverPendingProcessTextQuery()
+            }
+        } else if (Intent.ACTION_SEND == intent.action && intent.type?.startsWith("text/") == true) {
+            val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+            val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)
+            if (sharedText != null && sharedText.isNotEmpty()) {
+                Log.d("AuraMainActivity", "ACTION_SEND received: ${sharedText.take(100)}")
+                pendingShareContent = sharedText
+                deliverSharedContent(sharedText, subject)
             }
         }
     }
@@ -119,8 +219,46 @@ class MainActivity: FlutterActivity() {
         }
     }
 
+    /**
+     * Pushes a pending widget route to Dart. Keeps the value on failure so the
+     * poll in `getPendingRoute` can still pick it up.
+     */
+    private fun deliverPendingWidgetRoute() {
+        val route = pendingWidgetRoute ?: return
+        val channel = widgetChannel ?: return
+        runOnUiThread {
+            channel.invokeMethod("onWidgetRoute", route, object : MethodChannel.Result {
+                override fun success(result: Any?) {
+                    pendingWidgetRoute = null
+                }
+
+                override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
+                    Log.e("AuraMainActivity", "Widget route delivery failed: $errorMessage")
+                }
+
+                override fun notImplemented() {
+                    // Dart will poll instead.
+                }
+            })
+        }
+    }
+
+    private fun deliverSharedContent(text: String, title: String?) {
+        val channel = shareChannel
+        if (channel != null) {
+            runOnUiThread {
+                channel.invokeMethod("onSharedContent", mapOf(
+                    "text" to text,
+                    "title" to (title ?: "")
+                ))
+                pendingShareContent = null
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
+        isActivityResumed = true
         // Re-deliver any pending AI query that arrived while activity was paused
         val pending = AssistantForegroundService.pendingAiQuery
         if (pending != null && assistantAiChannel != null) {
@@ -129,10 +267,52 @@ class MainActivity: FlutterActivity() {
             assistantAiChannel?.invokeMethod("processAIQuery", pending)
         }
         deliverPendingProcessTextQuery()
+        deliverPendingWidgetRoute()
+        // Re-deliver pending share content
+        val pendingShare = pendingShareContent
+        if (pendingShare != null) {
+            deliverSharedContent(pendingShare, null)
+        }
+        // A Quick Settings tile requested that we turn the assistant on. We are
+        // now resumed (foreground), so a microphone FGS start is permitted.
+        if (pendingStartAssistant) {
+            pendingStartAssistant = false
+            startAssistantForeground()
+        }
+    }
+
+    override fun onPause() {
+        isActivityResumed = false
+        super.onPause()
+    }
+
+    /**
+     * Starts the assistant foreground service from a foreground (resumed)
+     * context. If the overlay permission is missing we open its settings page
+     * instead, because the assistant's UI cannot draw without it.
+     */
+    private fun startAssistantForeground() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M &&
+            !android.provider.Settings.canDrawOverlays(this)
+        ) {
+            val settingsIntent = Intent(
+                android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                android.net.Uri.parse("package:$packageName")
+            )
+            startActivity(settingsIntent)
+            return
+        }
+        val serviceIntent = Intent(this, com.aura.mobile.aura_mobile.assistant.AssistantForegroundService::class.java)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        AuraBrainRuntimeBridge.attachUiEngine(flutterEngine)
 
         // Event Channel for Assistant State
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, ASSISTANT_STATE_CHANNEL).setStreamHandler(
@@ -257,6 +437,21 @@ class MainActivity: FlutterActivity() {
                     // Android doesn't support force closing apps easily without root/accessibility
                     // We can just try to go to home screen or ignore for now to avoid crashes
                     result.success("Closing apps programmatically is restricted on Android.")
+                }
+                "saveImageToGallery" -> {
+                    val bytes = call.argument<ByteArray>("bytes")
+                    val name = call.argument<String>("filename") ?: "aura_${System.currentTimeMillis()}.jpg"
+                    if (bytes == null || bytes.isEmpty()) {
+                        result.error("INVALID_ARGUMENT", "Image bytes are required", null)
+                    } else {
+                        try {
+                            val saved = saveImageToGallery(bytes, name)
+                            if (saved) result.success("Saved to gallery")
+                            else result.error("SAVE_FAILED", "Could not write image", null)
+                        } catch (e: Exception) {
+                            result.error("SAVE_FAILED", e.message, null)
+                        }
+                    }
                 }
                 "openSettings" -> {
                     val type = call.argument<String>("type")
@@ -462,6 +657,20 @@ class MainActivity: FlutterActivity() {
         }
 
         // ═══ Smart Clipboard AI Channel ═══
+        // ═══ Home Screen Widget Channel ═══
+        widgetChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, WIDGET_CHANNEL)
+        widgetChannel!!.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getPendingRoute" -> {
+                    val route = pendingWidgetRoute
+                    pendingWidgetRoute = null
+                    result.success(route)
+                }
+                else -> result.notImplemented()
+            }
+        }
+        deliverPendingWidgetRoute()
+
         clipboardChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CLIPBOARD_CHANNEL)
         clipboardChannel!!.setMethodCallHandler { call, result ->
             when (call.method) {
@@ -504,7 +713,23 @@ class MainActivity: FlutterActivity() {
         screenContextChannel!!.setMethodCallHandler { call, result ->
             when (call.method) {
                 "getScreenContent" -> {
-                    result.success(ScreenContextAccessibilityService.currentScreenContent)
+                    // Dart's ScreenContext.fromMap expects a structured payload.
+                    // Returning a bare String here made every capture fail.
+                    val pkg = ScreenContextAccessibilityService.currentPackageName
+                    val appLabel = if (pkg.isBlank()) "Unknown" else try {
+                        val pm = applicationContext.packageManager
+                        pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+                    } catch (e: Exception) {
+                        pkg
+                    }
+                    result.success(
+                        mapOf(
+                            "packageName" to pkg,
+                            "appName" to appLabel,
+                            "screenText" to ScreenContextAccessibilityService.currentScreenContent,
+                            "windowTitle" to ScreenContextAccessibilityService.currentActivityName
+                        )
+                    )
                 }
                 "isAccessibilityEnabled" -> {
                     result.success(ScreenContextAccessibilityService.isServiceEnabled(this@MainActivity))
@@ -518,6 +743,61 @@ class MainActivity: FlutterActivity() {
                     } catch (e: Exception) {
                         result.error("FAILED", e.message, null)
                     }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // ═══ Interactive Agent Mode: Action + Query Channel (additive) ═══
+        // Every method delegates to AgentActionSurface, which does node work on a
+        // dedicated thread and refuses when the surface is disabled or the window
+        // is secure. No AccessibilityNodeInfo handle crosses this boundary.
+        agentControlChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, AGENT_CONTROL_CHANNEL)
+        agentControlChannel!!.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isServiceEnabled" -> {
+                    result.success(ScreenContextAccessibilityService.isServiceEnabled(this@MainActivity))
+                }
+                "openAccessibilitySettings" -> {
+                    try {
+                        val intent = Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("FAILED", e.message, null)
+                    }
+                }
+                "setActionsEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    result.success(AgentActionSurface.setEnabled(enabled))
+                }
+                "getScreenSignature" -> {
+                    AgentActionSurface.screenSignature { sig -> result.success(sig) }
+                }
+                "findNodes" -> {
+                    @Suppress("UNCHECKED_CAST")
+                    val query = (call.argument<Map<String, Any?>>("query")) ?: emptyMap()
+                    val limit = call.argument<Int>("limit") ?: 5
+                    AgentActionSurface.findNodes(query, limit) { nodes -> result.success(nodes) }
+                }
+                "tapNode" -> {
+                    val token = call.argument<Int>("handleToken") ?: -1
+                    AgentActionSurface.tapNode(token) { code -> result.success(code) }
+                }
+                "setNodeText" -> {
+                    val token = call.argument<Int>("handleToken") ?: -1
+                    val value = call.argument<String>("value") ?: ""
+                    AgentActionSurface.setNodeText(token, value) { code -> result.success(code) }
+                }
+                "scrollNode" -> {
+                    val token = call.argument<Int>("handleToken") ?: -1
+                    val forward = call.argument<Boolean>("forward") ?: true
+                    AgentActionSurface.scrollNode(token, forward) { code -> result.success(code) }
+                }
+                "performGlobal" -> {
+                    val action = call.argument<String>("action") ?: ""
+                    AgentActionSurface.performGlobal(action) { code -> result.success(code) }
                 }
                 else -> result.notImplemented()
             }
@@ -565,6 +845,27 @@ class MainActivity: FlutterActivity() {
             registerReceiver(notificationReceiver, notifFilter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(notificationReceiver, notifFilter)
+        }
+
+        // ═══ Share Receiver Channel (Smart Summarizer) ═══
+        shareChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SHARE_CHANNEL)
+        shareChannel!!.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getInitialShare" -> {
+                    val pending = pendingShareContent
+                    if (pending != null) {
+                        pendingShareContent = null
+                        result.success(mapOf("text" to pending, "title" to ""))
+                    } else {
+                        result.success(null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+        // If there's pending share content (app was cold-started via share), deliver it
+        if (pendingShareContent != null) {
+            deliverSharedContent(pendingShareContent!!, null)
         }
     }
 
@@ -828,6 +1129,62 @@ class MainActivity: FlutterActivity() {
             }
         }
         return false
+    }
+
+    /**
+     * Writes [bytes] into the device's Pictures/AURA album using MediaStore.
+     * On API 29+ this needs no runtime permission (scoped storage); on older
+     * versions it falls back to the public Pictures directory (WRITE perms are
+     * handled by the picker/permission flow elsewhere).
+     */
+    private fun saveImageToGallery(bytes: ByteArray, filename: String): Boolean {
+        val safeName = if (filename.contains('.')) filename else "$filename.jpg"
+        val mime = when {
+            safeName.endsWith(".png", true) -> "image/png"
+            safeName.endsWith(".webp", true) -> "image/webp"
+            else -> "image/jpeg"
+        }
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, safeName)
+                put(android.provider.MediaStore.Images.Media.MIME_TYPE, mime)
+                put(
+                    android.provider.MediaStore.Images.Media.RELATIVE_PATH,
+                    android.os.Environment.DIRECTORY_PICTURES + "/AURA"
+                )
+                put(android.provider.MediaStore.Images.Media.IS_PENDING, 1)
+            }
+            val resolver = contentResolver
+            val uri = resolver.insert(
+                android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                values
+            ) ?: return false
+            resolver.openOutputStream(uri)?.use { it.write(bytes) } ?: return false
+            values.clear()
+            values.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            return true
+        } else {
+            @Suppress("DEPRECATION")
+            val picturesDir = android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_PICTURES
+            )
+            val auraDir = java.io.File(picturesDir, "AURA")
+            if (!auraDir.exists()) auraDir.mkdirs()
+            val outFile = java.io.File(auraDir, safeName)
+            java.io.FileOutputStream(outFile).use { it.write(bytes) }
+            // Make it visible in the gallery.
+            android.media.MediaScannerConnection.scanFile(
+                this, arrayOf(outFile.absolutePath), arrayOf(mime), null
+            )
+            return true
+        }
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        AuraBrainRuntimeBridge.detachUiEngine(flutterEngine)
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     override fun onDestroy() {

@@ -7,7 +7,8 @@ import 'package:aura_mobile/presentation/providers/chat_provider.dart';
 import 'package:aura_mobile/presentation/providers/model_selector_provider.dart';
 import 'package:aura_mobile/presentation/providers/persona_provider.dart';
 import 'package:aura_mobile/presentation/pages/persona_selector_screen.dart';
-import 'package:aura_mobile/presentation/widgets/context_window_indicator.dart';
+import 'package:aura_mobile/presentation/widgets/model_switcher_sheet.dart';
+import 'package:aura_mobile/core/providers/ai_providers.dart';
 
 /// Extracted AppBar widget for ChatScreen — avoids rebuilding the entire chat
 /// when only the model state or persona changes.
@@ -26,7 +27,12 @@ class ChatAppBar extends ConsumerWidget implements PreferredSizeWidget {
     return AppBar(
       title: const _ModelTitleChip(),
       centerTitle: true,
-      backgroundColor: Colors.transparent, // Glassmorphic/transparent integration
+      // The chip sizes itself to whatever room is left between the menu button
+      // and the two action buttons; default title spacing stole 16px on each
+      // side and pushed long model names past the edge.
+      titleSpacing: 0,
+      backgroundColor:
+          Colors.transparent, // Glassmorphic/transparent integration
       elevation: 0,
       leadingWidth: 56,
       leading: Padding(
@@ -47,7 +53,11 @@ class ChatAppBar extends ConsumerWidget implements PreferredSizeWidget {
             builder: (context) {
               return IconButton(
                 padding: EdgeInsets.zero,
-                icon: const Icon(Icons.menu, color: ClayColors.textDark, size: 20),
+                icon: const Icon(
+                  Icons.menu,
+                  color: ClayColors.textDark,
+                  size: 20,
+                ),
                 onPressed: () => Scaffold.of(context).openDrawer(),
               );
             },
@@ -78,7 +88,9 @@ class ChatAppBar extends ConsumerWidget implements PreferredSizeWidget {
               onPressed: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const PersonaSelectorScreen()),
+                  MaterialPageRoute(
+                    builder: (_) => const PersonaSelectorScreen(),
+                  ),
                 );
               },
             ),
@@ -86,7 +98,12 @@ class ChatAppBar extends ConsumerWidget implements PreferredSizeWidget {
         ),
         // Consolidated Options Button (Circular)
         Padding(
-          padding: const EdgeInsets.only(right: 12.0, left: 4.0, top: 8.0, bottom: 8.0),
+          padding: const EdgeInsets.only(
+            right: 12.0,
+            left: 4.0,
+            top: 8.0,
+            bottom: 8.0,
+          ),
           child: Container(
             width: 40,
             decoration: BoxDecoration(
@@ -101,16 +118,21 @@ class ChatAppBar extends ConsumerWidget implements PreferredSizeWidget {
               ],
             ),
             child: Theme(
-              data: Theme.of(context).copyWith(
-                cardColor: ClayColors.warmGrey,
-              ),
+              data: Theme.of(context).copyWith(cardColor: ClayColors.warmGrey),
               child: PopupMenuButton<String>(
                 padding: EdgeInsets.zero,
-                icon: const Icon(Icons.more_vert_rounded, color: ClayColors.textDark, size: 20),
+                icon: const Icon(
+                  Icons.more_vert_rounded,
+                  color: ClayColors.textDark,
+                  size: 20,
+                ),
                 tooltip: "More Options",
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
-                  side: BorderSide(color: ClayColors.goldAccent.withOpacity(0.2), width: 1),
+                  side: BorderSide(
+                    color: ClayColors.goldAccent.withOpacity(0.2),
+                    width: 1,
+                  ),
                 ),
                 onSelected: (value) {
                   if (value == 'new_chat') {
@@ -124,7 +146,11 @@ class ChatAppBar extends ConsumerWidget implements PreferredSizeWidget {
                     value: 'new_chat',
                     child: Row(
                       children: [
-                        const Icon(Icons.add_rounded, color: ClayColors.goldAccent, size: 18),
+                        const Icon(
+                          Icons.add_rounded,
+                          color: ClayColors.goldAccent,
+                          size: 18,
+                        ),
                         const SizedBox(width: 8),
                         Text(
                           'New Chat',
@@ -141,7 +167,11 @@ class ChatAppBar extends ConsumerWidget implements PreferredSizeWidget {
                     value: 'export',
                     child: Row(
                       children: [
-                        const Icon(Icons.ios_share_rounded, color: ClayColors.textDark, size: 18),
+                        const Icon(
+                          Icons.ios_share_rounded,
+                          color: ClayColors.textDark,
+                          size: 18,
+                        ),
                         const SizedBox(width: 8),
                         Text(
                           'Export Chat',
@@ -168,12 +198,28 @@ class ChatAppBar extends ConsumerWidget implements PreferredSizeWidget {
 class _ModelTitleChip extends ConsumerWidget {
   const _ModelTitleChip();
 
+  /// Drops the vendor prefix that providers put in front of model names
+  /// ("Google: Lyria 3 Pro Preview" → "Lyria 3 Pro Preview"). The cloud icon
+  /// already signals it is an online model, so the prefix only ate space.
+  static String? _shortModelName(String? name) {
+    if (name == null || name.trim().isEmpty) return null;
+    final trimmed = name.trim();
+    final separator = trimmed.indexOf(': ');
+    if (separator > 0 && separator < trimmed.length - 2) {
+      return trimmed.substring(separator + 2).trim();
+    }
+    return trimmed;
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final modelState = ref.watch(modelSelectorProvider);
     final isLoading = ref.watch(chatProvider.select((s) => s.isModelLoading));
+    final router = ref.watch(llmRouterProvider);
 
-    final isAppInitializing = modelState.activeModelId == null || isLoading;
+    final isAppInitializing =
+        (modelState.activeModelId == null && !router.isModelLoaded) ||
+        isLoading;
 
     if (isAppInitializing) {
       return Container(
@@ -200,13 +246,18 @@ class _ModelTitleChip extends ConsumerWidget {
       );
     }
 
-    final activeModel = modelState.availableModels.firstWhere(
-      (m) => m.id == modelState.activeModelId,
-      orElse: () => modelState.availableModels.first,
-    );
+    final isOnline = router.isOnline;
+    final localModel = modelState.availableModels
+        .where((m) => m.id == modelState.activeModelId)
+        .firstOrNull;
+    final label = isOnline
+        ? _shortModelName(router.activeModelName) ?? 'Online model'
+        : (localModel?.name ??
+              _shortModelName(router.activeModelName) ??
+              'Select a model');
 
     return GestureDetector(
-      onTap: () => Scaffold.of(context).openDrawer(),
+      onTap: () => showModelSwitcherSheet(context),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
@@ -223,12 +274,27 @@ class _ModelTitleChip extends ConsumerWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              activeModel.name,
-              style: GoogleFonts.outfit(
-                color: ClayColors.textDark,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
+            Icon(
+              isOnline ? Icons.cloud_outlined : Icons.phone_android_rounded,
+              size: 14,
+              color: isOnline ? ClayColors.blueAccent : ClayColors.greenAccent,
+            ),
+            const SizedBox(width: 6),
+            // Flexible instead of a fixed 150px cap: a long provider model id
+            // ("Google: Lyria 3 Pro Preview") overflowed the app bar because
+            // the icons and padding pushed the fixed width past the available
+            // space. Now the label shrinks to fit and ellipsises once.
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.outfit(
+                  color: ClayColors.textDark,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
             const SizedBox(width: 4),
@@ -295,10 +361,7 @@ class ConciseBadge extends ConsumerWidget {
               if (isConcise)
                 ShaderMask(
                   shaderCallback: (bounds) => const LinearGradient(
-                    colors: [
-                      Color(0xFF5CA9E5),
-                      Color(0xFFE25F8E),
-                    ],
+                    colors: [Color(0xFF5CA9E5), Color(0xFFE25F8E)],
                   ).createShader(bounds),
                   child: const Icon(
                     Icons.star_rounded,
@@ -316,7 +379,9 @@ class ConciseBadge extends ConsumerWidget {
               Text(
                 'Concise',
                 style: GoogleFonts.outfit(
-                  color: isConcise ? ClayColors.goldAccent : ClayColors.textMuted,
+                  color: isConcise
+                      ? ClayColors.goldAccent
+                      : ClayColors.textMuted,
                   fontSize: 12,
                   fontWeight: FontWeight.bold,
                 ),

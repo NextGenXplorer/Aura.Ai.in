@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/study_container"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="12dp"
+    android:background="@drawable/widget_background">
+
+    <LinearLayout
+        android:id="@+id/study_header"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_alignParentTop="true">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🎓"
+            android:textSize="14sp" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/widget_study_name"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:textColor="#191816"
+            android:layout_marginStart="6dp" />
+
+        <TextView
+            android:id="@+id/study_quiz"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/widget_study_quiz"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:textColor="#B3862B"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:background="@drawable/widget_icon_button" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/study_due_row"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="bottom"
+        android:layout_below="@id/study_header"
+        android:layout_marginTop="8dp">
+
+        <TextView
+            android:id="@+id/study_due_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0"
+            android:textSize="30sp"
+            android:textStyle="bold"
+            android:textColor="#B3862B"
+            android:includeFontPadding="false" />
+
+        <TextView
+            android:id="@+id/study_due_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/widget_study_cards_due"
+            android:textSize="12sp"
+            android:textColor="#4A4A4A"
+            android:layout_marginStart="6dp"
+            android:layout_marginBottom="4dp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/study_streak"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_below="@id/study_due_row"
+        android:layout_marginTop="2dp"
+        android:textSize="11sp"
+        android:textColor="#7A7A7A"
+        android:maxLines="1"
+        android:ellipsize="end" />
+
+    <TextView
+        android:id="@+id/study_exam"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_below="@id/study_streak"
+        android:layout_marginTop="2dp"
+        android:textSize="11sp"
+        android:textColor="#7A7A7A"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/study_cta"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_alignParentBottom="true"
+        android:textSize="11sp"
+        android:textStyle="bold"
+        android:textColor="#B3862B"
+        android:maxLines="1"
+        android:ellipsize="end" />
+
+</RelativeLayout>

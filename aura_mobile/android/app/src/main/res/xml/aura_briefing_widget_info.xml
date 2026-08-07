@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  30 min is the floor the OS actually honours for updatePeriodMillis (a smaller
+  value is silently clamped). Fresher data comes from WorkManager, from the app
+  pushing updates, and from the in-widget refresh button; the clock ticks itself
+  via TextClock.
+
+  minHeight is taller than the old 110dp because the headline list needs room to
+  be worth scrolling.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="250dp"
+    android:minHeight="180dp"
+    android:minResizeWidth="180dp"
+    android:minResizeHeight="110dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="3"
+    android:updatePeriodMillis="1800000"
+    android:initialLayout="@layout/aura_briefing_widget"
+    android:previewLayout="@layout/aura_briefing_widget"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:description="@string/widget_description" />

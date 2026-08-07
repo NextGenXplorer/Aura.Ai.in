@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Only classes on the RemoteViews allow-list may appear here. A bare <View>
+  makes the launcher fall back to "Problem loading widget", which is why the
+  divider is a FrameLayout with a background instead.
+-->
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_container"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="12dp"
+    android:background="@drawable/widget_background">
+
+    <!-- Header: logo, title, self-updating clock, refresh -->
+    <LinearLayout
+        android:id="@+id/header_row"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_alignParentTop="true">
+
+        <TextView
+            android:id="@+id/widget_logo"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="✦"
+            android:textSize="18sp"
+            android:textColor="#B3862B" />
+
+        <TextView
+            android:id="@+id/widget_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/widget_name"
+            android:textSize="14sp"
+            android:textColor="#191816"
+            android:textStyle="bold"
+            android:layout_marginStart="8dp" />
+
+        <!--
+          TextClock keeps itself ticking without the provider being woken. An
+          AppWidgetProvider cannot redraw more than about twice an hour, so a
+          rendered timestamp was stale within a minute.
+        -->
+        <TextClock
+            android:id="@+id/widget_clock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:format12Hour="h:mm a"
+            android:format24Hour="HH:mm"
+            android:textSize="11sp"
+            android:textColor="#7A7A7A"
+            android:layout_marginEnd="8dp" />
+
+        <TextView
+            android:id="@+id/widget_refresh"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:text="↻"
+            android:textSize="15sp"
+            android:textColor="#B3862B"
+            android:gravity="center"
+            android:background="@drawable/widget_icon_button"
+            android:contentDescription="@string/widget_refresh_label" />
+
+        <TextView
+            android:id="@+id/widget_refreshing"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:text="…"
+            android:textSize="15sp"
+            android:textColor="#9E9E9E"
+            android:gravity="center"
+            android:visibility="gone"
+            android:background="@drawable/widget_icon_button" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/divider"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_below="@id/header_row"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="4dp"
+        android:background="#22B3862B" />
+
+    <!-- Footer is laid out first so the list can fill the remaining space -->
+    <LinearLayout
+        android:id="@+id/footer_row"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_alignParentBottom="true"
+        android:paddingTop="6dp">
+
+        <TextView
+            android:id="@+id/widget_weather"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/widget_weather_placeholder"
+            android:textSize="11sp"
+            android:textColor="#7A7A7A"
+            android:maxLines="1"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/widget_quote"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="✦ AURA AI"
+            android:textSize="10sp"
+            android:textColor="#B3862B"
+            android:textStyle="italic"
+            android:gravity="end"
+            android:maxLines="1"
+            android:ellipsize="end" />
+    </LinearLayout>
+
+    <!-- Scrollable headlines -->
+    <ListView
+        android:id="@+id/news_list"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_below="@id/divider"
+        android:layout_above="@id/footer_row"
+        android:divider="@android:color/transparent"
+        android:dividerHeight="6dp"
+        android:scrollbars="none" />
+
+    <TextView
+        android:id="@+id/news_empty"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_below="@id/divider"
+        android:layout_above="@id/footer_row"
+        android:gravity="center"
+        android:text="@string/widget_news_empty"
+        android:textSize="12sp"
+        android:textColor="#9E9E9E" />
+
+</RelativeLayout>

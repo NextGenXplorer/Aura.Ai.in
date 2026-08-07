@@ -1,12 +1,11 @@
-
 import 'dart:io';
-import 'package:aura_mobile/ai/run_anywhere_service.dart';
-import 'package:aura_mobile/core/providers/ai_providers.dart';
 import 'package:aura_mobile/domain/entities/document.dart';
 import 'package:aura_mobile/domain/repositories/document_repository.dart';
-import 'package:aura_mobile/domain/services/vector_store_service.dart';
 import 'package:aura_mobile/core/errors/app_exceptions.dart';
 import 'package:aura_mobile/core/services/error_handler_service.dart';
+import 'package:aura_mobile/core/services/utility_model_manager.dart';
+import 'package:aura_mobile/core/providers/ai_providers.dart';
+import 'package:aura_mobile/data/datasources/embedding_service.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:read_pdf_text/read_pdf_text.dart';
@@ -14,24 +13,29 @@ import 'package:uuid/uuid.dart';
 import 'package:path/path.dart' as p;
 import 'package:aura_mobile/data/repositories/document_repository_impl.dart';
 
-final documentServiceProvider = Provider((ref) => DocumentService(
-  ref.read(runAnywhereProvider),
-  ref.read(documentRepositoryProvider),
-  VectorStoreService(),
-));
+final documentServiceProvider = Provider(
+  (ref) => DocumentService(
+    ref.read(documentRepositoryProvider),
+    ref.read(utilityModelManagerProvider.notifier),
+    ref.read(embeddingServiceProvider),
+  ),
+);
 
 class DocumentService {
-  final RunAnywhere _aiService;
   final DocumentRepository _repository;
-  final VectorStoreService _vectorStore;
+  final UtilityModelManager _utilityModelManager;
+  final EmbeddingService _embeddingService;
   final ErrorHandlerService _errorHandler = ErrorHandlerService();
 
   // Configuration
   static const int _maxFileSizeMB = 50;
   static const int _chunkSize = 500;
-  static const double _similarityThreshold = 0.65;
 
-  DocumentService(this._aiService, this._repository, this._vectorStore);
+  DocumentService(
+    this._repository,
+    this._utilityModelManager,
+    this._embeddingService,
+  );
 
   /// Pick and process a document from file picker
   Future<void> pickAndProcessDocument() async {
@@ -82,11 +86,13 @@ class DocumentService {
       // 3. Extract text from PDF
       String text;
       try {
-        text = await _errorHandler.executeWithRetry(
-          operation: () => ReadPdfText.getPDFtext(file.path),
-          operationName: 'Extract PDF text',
-          maxAttempts: 2,
-        ) ?? '';
+        text =
+            await _errorHandler.executeWithRetry(
+              operation: () => ReadPdfText.getPDFtext(file.path),
+              operationName: 'Extract PDF text',
+              maxAttempts: 2,
+            ) ??
+            '';
       } catch (e) {
         throw StorageException.fileCorrupted(file.path);
       }
@@ -143,54 +149,33 @@ class DocumentService {
     }
   }
 
-  /// Process document chunks with partial failure handling
+  /// Process document chunks — generates embeddings with EmbeddingGemma when
+  /// available, otherwise saves with empty embeddings (keyword search fallback).
   Future<void> _processChunks(String docId, List<String> chunks) async {
-    if (!_aiService.isModelLoaded) {
-      throw AIServiceException.modelNotLoaded();
-    }
-
     List<DocumentChunk> successfulChunks = [];
-    int failedChunks = 0;
 
     for (int i = 0; i < chunks.length; i++) {
       final chunkContent = chunks[i];
 
-      try {
-        // Generate embedding with retry
-        final embedding = await _errorHandler.executeWithRetry(
-          operation: () => _aiService.getEmbeddings(chunkContent),
-          operationName: 'Generate chunk $i embedding',
-          maxAttempts: 3,
-        );
-
-        if (embedding != null && embedding.isNotEmpty) {
-          successfulChunks.add(DocumentChunk(
-            id: const Uuid().v4(),
-            documentId: docId,
-            content: chunkContent,
-            chunkIndex: i,
-            embedding: embedding,
-          ));
-        } else {
-          failedChunks++;
-          _errorHandler.logWarning('Chunk $i: empty embedding returned');
-        }
-      } catch (e) {
-        failedChunks++;
-        _errorHandler.logWarning(
-          'Failed to generate embedding for chunk $i: $e',
-        );
-
-        // Allow up to 20% failure rate
-        if (failedChunks > chunks.length * 0.2) {
-          throw AIServiceException(
-            message: 'Too many chunk processing failures',
-            technicalDetails: 'Failed $failedChunks/${chunks.length} chunks',
-            recoverySuggestion: 'The AI model may be unstable. Try reloading the model.',
-            errorCode: 'DOCUMENT_CHUNK_PROCESSING_FAILED',
-          );
+      // Generate embedding if EmbeddingGemma is available (progressive enhancement)
+      List<double> embedding = [];
+      if (_utilityModelManager.state.isEmbeddingGemmaAvailable) {
+        try {
+          embedding = await _embeddingService.embed(chunkContent);
+        } catch (e) {
+          _errorHandler.logWarning('Chunk embedding failed: $e');
         }
       }
+
+      successfulChunks.add(
+        DocumentChunk(
+          id: const Uuid().v4(),
+          documentId: docId,
+          content: chunkContent,
+          chunkIndex: i,
+          embedding: embedding.isNotEmpty ? embedding : [],
+        ),
+      );
 
       // Progress logging every 10 chunks
       if ((i + 1) % 10 == 0) {
@@ -198,11 +183,10 @@ class DocumentService {
       }
     }
 
-    // Save all successful chunks in a batch
     if (successfulChunks.isEmpty) {
       throw AIServiceException(
         message: 'No chunks were successfully processed',
-        technicalDetails: 'All embeddings failed for document $docId',
+        technicalDetails: 'All chunks failed for document $docId',
         recoverySuggestion: 'Try reloading the AI model',
         errorCode: 'DOCUMENT_NO_CHUNKS_PROCESSED',
       );
@@ -211,7 +195,7 @@ class DocumentService {
     try {
       await _repository.saveChunks(successfulChunks);
       _errorHandler.logInfo(
-        'Saved ${successfulChunks.length}/${chunks.length} chunks (${failedChunks} failed)',
+        'Saved ${successfulChunks.length}/${chunks.length} chunks',
       );
     } catch (e) {
       // Rollback document if chunks can't be saved
@@ -274,7 +258,11 @@ class DocumentService {
     }
   }
 
-  /// Retrieve relevant document chunks for a query
+  /// Retrieve relevant document chunks for a query.
+  ///
+  /// Uses vector similarity when an embedding model is available (currently a
+  /// weak lexical vectoriser, not true semantic embeddings) and keyword
+  /// matching otherwise, which is the active path today.
   Future<List<String>> retrieveRelevantContext(
     String query, {
     int limit = 5,
@@ -286,29 +274,39 @@ class DocumentService {
     }
 
     try {
-      // 1. Check if model is loaded
-      if (!_aiService.isModelLoaded) {
-        throw AIServiceException.modelNotLoaded();
+      // Progressive Enhancement: semantic search if EmbeddingGemma available
+      if (_utilityModelManager.state.isEmbeddingGemmaAvailable) {
+        try {
+          final queryEmbedding = await _embeddingService.embed(query);
+          if (queryEmbedding.isNotEmpty) {
+            final allChunks = await _repository.getAllChunks();
+            final withEmbeddings = allChunks
+                .where((c) => c.embedding != null && c.embedding!.isNotEmpty)
+                .toList();
+            if (withEmbeddings.isNotEmpty) {
+              final scored = withEmbeddings.map((c) {
+                final score = EmbeddingService.cosineSimilarity(
+                  queryEmbedding,
+                  c.embedding!,
+                );
+                return MapEntry(c, score);
+              }).toList()..sort((a, b) => b.value.compareTo(a.value));
+
+              return scored
+                  .take(limit)
+                  .where((e) => e.value > 0.5)
+                  .map((e) => e.key.content)
+                  .toList();
+            }
+          }
+        } catch (e) {
+          _errorHandler.logWarning(
+            'Semantic chunk search failed, using keyword fallback: $e',
+          );
+        }
       }
 
-      // 2. Generate query embedding with retry
-      List<double>? queryEmbedding;
-      try {
-        queryEmbedding = await _errorHandler.executeWithRetry(
-          operation: () => _aiService.getEmbeddings(query),
-          operationName: 'Generate document query embedding',
-          maxAttempts: 2,
-        );
-      } catch (e) {
-        throw AIServiceException.embeddingFailed(query, e);
-      }
-
-      if (queryEmbedding == null || queryEmbedding.isEmpty) {
-        _errorHandler.logWarning('Empty embedding for document query');
-        return [];
-      }
-
-      // 3. Fetch all chunks
+      // Fallback: existing keyword-based retrieval
       List<DocumentChunk> allChunks;
       try {
         allChunks = await _repository.getAllChunks();
@@ -321,35 +319,31 @@ class DocumentService {
         return [];
       }
 
-      // 4. Calculate similarities
+      // Simple keyword match scoring
+      final queryWords = query.toLowerCase().split(RegExp(r'\s+'));
       final scoredChunks = allChunks
-          .where((chunk) => chunk.embedding != null && chunk.embedding!.isNotEmpty)
           .map((chunk) {
-        try {
-          final score = _vectorStore.cosineSimilarity(
-            queryEmbedding!,
-            chunk.embedding!,
-          );
-          return MapEntry(chunk, score);
-        } catch (e) {
-          _errorHandler.logDebug(
-            'Similarity calculation failed for chunk ${chunk.id}: $e',
-          );
-          return MapEntry(chunk, 0.0);
-        }
-      }).toList();
+            final content = chunk.content.toLowerCase();
+            int score = 0;
+            for (final word in queryWords) {
+              if (word.length > 2 && content.contains(word)) {
+                score++;
+              }
+            }
+            return MapEntry(chunk, score);
+          })
+          .where((entry) => entry.value > 0)
+          .toList();
 
-      // 5. Sort and filter
       scoredChunks.sort((a, b) => b.value.compareTo(a.value));
 
       final results = scoredChunks
           .take(limit)
-          .where((entry) => entry.value > _similarityThreshold)
           .map((entry) => entry.key.content)
           .toList();
 
       _errorHandler.logDebug(
-        'Document search returned ${results.length} chunks (threshold: $_similarityThreshold)',
+        'Document search returned ${results.length} chunks',
       );
 
       return results;

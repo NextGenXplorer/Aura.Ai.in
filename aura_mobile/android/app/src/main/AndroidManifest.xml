@@ -1,5 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
+    <permission
+        android:name="com.aura.mobile.aura_mobile.permission.USE_AURA_BRAIN"
+        android:protectionLevel="signature" />
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
@@ -67,6 +70,17 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <data android:mimeType="text/plain"/>
             </intent-filter>
+            <!-- Share Target: Receive text/URLs from other apps -->
+            <intent-filter android:label="Summarize with AURA">
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/plain"/>
+            </intent-filter>
+            <intent-filter android:label="Summarize with AURA">
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/*"/>
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
@@ -74,6 +88,11 @@
             android:name="flutterEmbedding"
             android:value="2" />
         
+        <service
+            android:name=".brain.AuraBrainService"
+            android:exported="true"
+            android:permission="com.aura.mobile.aura_mobile.permission.USE_AURA_BRAIN" />
+
         <service android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
             android:foregroundServiceType="dataSync"
             android:exported="false" />
@@ -82,6 +101,28 @@
             android:foregroundServiceType="microphone"
             android:stopWithTask="false"
             android:exported="false" />
+
+        <!-- Invisible trampoline: lets the QS tile start the mic service from a
+             foreground context without visibly opening the app. -->
+        <activity
+            android:name=".assistant.AssistantLauncherActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:exported="false" />
+
+        <!-- Quick Settings tile to toggle the Voice Assistant from the shade -->
+        <service
+            android:name=".assistant.AuraAssistantTileService"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="AURA Assistant"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
             
         <!-- exported=true required: AlarmManager needs to deliver broadcasts when process is dead (Android 12+) -->
         <receiver android:name=".assistant.ReminderReceiver"
@@ -123,6 +164,56 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+
+        <!-- AURA Daily Briefing Home Screen Widget -->
+        <receiver
+            android:name=".widget.AuraBriefingWidget"
+            android:exported="true"
+            android:label="@string/widget_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.aura.mobile.widget.ACTION_REFRESH" />
+                <action android:name="com.aura.mobile.widget.ACTION_OPEN_ARTICLE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/aura_briefing_widget_info" />
+        </receiver>
+
+        <!-- Adapter that backs the briefing widget's scrollable headline list.
+             BIND_REMOTEVIEWS is a signature permission: it lets only the system
+             launcher bind to this service. -->
+        <service
+            android:name=".widget.NewsWidgetService"
+            android:permission="android.permission.BIND_REMOTEVIEWS"
+            android:exported="false" />
+
+        <!-- AURA Quick Actions Widget -->
+        <receiver
+            android:name=".widget.AuraQuickActionsWidget"
+            android:exported="true"
+            android:label="@string/widget_quick_actions_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/aura_quick_actions_widget_info" />
+        </receiver>
+
+        <!-- AURA Study Widget -->
+        <receiver
+            android:name=".widget.AuraStudyWidget"
+            android:exported="true"
+            android:label="@string/widget_study_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.aura.mobile.widget.ACTION_REFRESH" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/aura_study_widget_info" />
+        </receiver>
             
         <!-- WorkManager Service (Handled by workmanager package automatically, but explicit declaration helps if merge issues occur) -->
         <!-- Note: workmanager plugin adds its own service definitions. We generally don't need to duplicate unless customizing. -->

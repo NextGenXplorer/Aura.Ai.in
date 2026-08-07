@@ -772,7 +772,7 @@ probe are replaced with fakes/mocks so properties test *our* logic cheaply.
 - **Library:** Dart property testing via the [`glados`](https://pub.dev/packages/glados)
   package (or an equivalent generator-based approach layered on `package:test`). PBT is not
   implemented from scratch.
-- **Iterations:** each property test runs a minimum of 100 generated cases.
+- **Iterations:** each property test runs a minimum of 100 generated cases.d
 - **Generators:**
   - `ModelInfo` generator producing random engine, capability flags, speed, sizes, RAM, ids.
   - Token-stream generator (for output cleaning and LiteRT streaming) that injects stop

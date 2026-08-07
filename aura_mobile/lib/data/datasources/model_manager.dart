@@ -1,17 +1,12 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 import 'package:disk_space_2/disk_space_2.dart';
-import 'package:aura_mobile/domain/entities/ai_engine.dart';
 import 'package:aura_mobile/domain/entities/model_info.dart';
 import 'package:aura_mobile/core/errors/app_exceptions.dart';
 import 'package:aura_mobile/core/services/error_handler_service.dart';
 
 class ModelManager {
   final ErrorHandlerService _errorHandler = ErrorHandlerService();
-
-  // GGUF file magic bytes for validation
-  static const int _ggufMagic = 0x46554747; // 'GGUF' in little-endian
 
   // LiteRT `.task` files are MediaPipe Task bundles, which are ZIP archives.
   // A ZIP archive begins with one of these local-file-header signatures.
@@ -35,7 +30,8 @@ class ModelManager {
         final docsDir = await getApplicationDocumentsDirectory();
         final modelFiles = await Directory(docsDir.path)
             .list()
-            .where((entity) => entity is File && entity.path.endsWith('.gguf'))
+            .where((entity) => entity is File && 
+                (entity.path.endsWith('.task') || entity.path.endsWith('.litertlm')))
             .map((entity) {
               // Platform-agnostic path splitting
               final path = entity.path;
@@ -75,10 +71,10 @@ class ModelManager {
         return false;
       }
 
-      // Validate the file format header for the model's engine.
+      // Validate the file format header for the model.
       if (!await _validateModelFormat(file, model)) {
         _errorHandler.logWarning(
-          'Model ${model.id} failed ${model.engine.name} format validation',
+          'Model ${model.id} failed LiteRT format validation',
         );
         return false;
       }
@@ -90,32 +86,11 @@ class ModelManager {
     }
   }
 
-  /// Validate GGUF file format by checking magic bytes
-  Future<bool> _validateGGUFFormat(File file) async {
-    try {
-      final bytes = await file.openRead(0, 4).first;
-      if (bytes.length < 4) return false;
-
-      // GGUF magic is 'GGUF' (0x47475546 in big-endian, 0x46554747 in little-endian)
-      final magic = ByteData.sublistView(Uint8List.fromList(bytes)).getUint32(0, Endian.little);
-      return magic == _ggufMagic;
-    } catch (e) {
-      _errorHandler.logWarning('Error validating GGUF format: $e');
-      return false;
-    }
-  }
-
-  /// Validate a model file's format header based on the engine that owns it.
+  /// Validate a model file's format header.
   ///
-  /// - `gguf` models keep the existing GGUF magic-byte check.
-  /// - `litert` models validate the `.task` / `.litertlm` container header.
+  /// All models are now LiteRT — validates `.task` / `.litertlm` container header.
   Future<bool> _validateModelFormat(File file, ModelInfo model) async {
-    switch (model.engine) {
-      case AIEngine.gguf:
-        return _validateGGUFFormat(file);
-      case AIEngine.litert:
-        return _validateLiteRtFormat(file, model.fileName);
-    }
+    return _validateLiteRtFormat(file, model.fileName);
   }
 
   /// Validate a LiteRT container file by checking its header against the
@@ -193,10 +168,10 @@ class ModelManager {
         corruptionReason = 'Size mismatch: expected ${model.sizeBytes}, got $fileSize';
       }
 
-      // Check format header for the model's engine.
+      // Check format header for the model.
       if (!isCorrupt && !await _validateModelFormat(file, model)) {
         isCorrupt = true;
-        corruptionReason = 'Invalid ${model.engine.name} format';
+        corruptionReason = 'Invalid LiteRT format';
       }
 
       if (isCorrupt) {

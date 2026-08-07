@@ -54,7 +54,7 @@ class ForegroundDownloaderHandler extends TaskHandler {
       await _downloader.download(
         url: url,
         savePath: savePath,
-        concurrency: 8, // 8 parallel chunks for maximum throughput
+        concurrency: 8, // 8 parallel connections to maximize 5G speed
         onProgress: (received, total) {
           final now = DateTime.now();
           final elapsedSinceUpdate = now.difference(lastUpdateTime).inMilliseconds;
@@ -100,11 +100,11 @@ class ForegroundDownloaderHandler extends TaskHandler {
       FlutterForegroundTask.sendDataToMain([url, 3, 100]);
     } catch (e) {
       // Failure — notify main isolate (status 4 = failed)
+      // NOTE: Chunk files are NOT deleted — they'll be used to resume on next attempt
       final errMsg = e.toString();
       FlutterForegroundTask.updateService(
-        notificationTitle: 'Download Failed',
-        notificationText:
-            errMsg.length > 80 ? '${errMsg.substring(0, 80)}...' : errMsg,
+        notificationTitle: 'Download Paused — Will Resume',
+        notificationText: 'Tap to retry. Progress is saved.',
       );
       FlutterForegroundTask.sendDataToMain([url, 4, 0]);
     } finally {

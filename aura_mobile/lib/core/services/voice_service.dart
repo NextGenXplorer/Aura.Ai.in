@@ -22,11 +22,12 @@ class VoiceService {
     try {
       await _flutterTts.setLanguage("en-US");
       await _flutterTts.setPitch(1.0);
-      await _flutterTts.setSpeechRate(0.5);
+      await _flutterTts.setSpeechRate(0.55);
       await _flutterTts.setVolume(1.0);
 
       _isInitialized = await _speechToText.initialize(
-        onError: (error) => debugPrint('VoiceService STT Error: ${error.errorMsg}'),
+        onError: (error) =>
+            debugPrint('VoiceService STT Error: ${error.errorMsg}'),
         onStatus: (status) => debugPrint('VoiceService STT Status: $status'),
       );
 
@@ -39,7 +40,9 @@ class VoiceService {
 
   /// Start listening. Calls onResult(text, true) when speech is final.
   /// Uses enhanced settings for better accuracy with names and mixed language.
-  Future<void> startListening({required Function(String, bool) onResult}) async {
+  Future<void> startListening({
+    required Function(String, bool) onResult,
+  }) async {
     if (!_isInitialized) {
       final ok = await initialize();
       if (!ok) {
@@ -71,7 +74,9 @@ class VoiceService {
         cancelOnError: false,
         partialResults: true,
         listenFor: const Duration(seconds: 60), // Extended from 30s to 60s
-        pauseFor: const Duration(seconds: 4), // Extended from 3s to 4s — more time between words
+        pauseFor: const Duration(
+          seconds: 4,
+        ), // Extended from 3s to 4s — more time between words
         // Use the device's default locale for better name recognition
         localeId: null, // null = device default (supports Hindi-English mix)
       );
@@ -109,6 +114,30 @@ class VoiceService {
       debugPrint('VoiceService speak failed: $e');
       _isSpeaking = false;
     }
+  }
+
+  /// Speak a single sentence/chunk immediately without waiting for full text.
+  /// Used for streaming TTS — call this for each sentence as it arrives.
+  Future<void> speakChunk(String chunk) async {
+    if (chunk.trim().isEmpty) return;
+
+    try {
+      final cleaned = _cleanForTTS(chunk);
+      if (cleaned.isEmpty) return;
+
+      _isSpeaking = true;
+      await _flutterTts.awaitSpeakCompletion(true);
+      await _flutterTts.speak(cleaned);
+    } catch (e) {
+      debugPrint('VoiceService speakChunk failed: $e');
+    } finally {
+      _isSpeaking = false;
+    }
+  }
+
+  /// Mark TTS as done (call after all streaming chunks are spoken).
+  void markSpeakingDone() {
+    _isSpeaking = false;
   }
 
   Future<void> stopSpeaking() async {

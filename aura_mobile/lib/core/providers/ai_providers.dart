@@ -1,41 +1,77 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:aura_mobile/ai/run_anywhere_service.dart';
-import 'package:aura_mobile/core/services/device_service.dart';
-import 'package:aura_mobile/data/datasources/engine_router.dart';
-import 'package:aura_mobile/data/datasources/image_generation_service.dart';
+import 'package:aura_mobile/core/services/download_service.dart';
+import 'package:aura_mobile/core/services/llm_selection_store.dart';
+import 'package:aura_mobile/core/services/provider_api_key_store.dart';
 import 'package:aura_mobile/data/datasources/litert_service.dart';
+import 'package:aura_mobile/data/datasources/llm_router.dart';
 import 'package:aura_mobile/data/datasources/llm_service.dart';
+import 'package:aura_mobile/data/datasources/openai_compatible_llm_service.dart';
+import 'package:aura_mobile/data/datasources/function_gemma_service.dart';
+import 'package:aura_mobile/data/datasources/embedding_service.dart';
+import 'package:aura_mobile/data/datasources/image_generation_service.dart';
 import 'package:aura_mobile/domain/services/llm_intent_classifier.dart';
 
-// Core AI Services
+/// Existing private on-device LiteRT engine. Its download/load behavior is
+/// unchanged and it remains available when an online model is selected.
+final liteRtServiceProvider = Provider<LiteRtService>((ref) => LiteRtService());
 
-/// The existing GGUF engine (RunAnywhere / fllama). Kept for backward
-/// compatibility and used as the `ggufEngine` parameter of [EngineRouter].
-final runAnywhereProvider = Provider((ref) => RunAnywhere());
+final providerApiKeyStoreProvider = Provider<ProviderApiKeyStore>(
+  (ref) => ProviderApiKeyStore(),
+);
 
-/// The EngineRouter exposed with its concrete type so the Model Selector can
-/// call [EngineRouter.loadModelInfo] directly.
-final engineRouterProvider = Provider<EngineRouter>((ref) {
-  final ggufEngine = LLMServiceImpl(ref.watch(runAnywhereProvider));
-  final litertEngine = LiteRtService();
-  final deviceService = ref.watch(deviceServiceProvider);
+final llmSelectionStoreProvider = Provider<LLMSelectionStore>(
+  (ref) => LLMSelectionStore(),
+);
 
-  return EngineRouter(
-    ggufEngine: ggufEngine,
-    litertEngine: litertEngine,
-    deviceService: deviceService,
+final onlineLLMServiceProvider = Provider<OpenAICompatibleLLMService>(
+  (ref) => OpenAICompatibleLLMService(),
+);
+
+/// Explicitly routes the same Aura orchestration flow to local or online AI.
+/// Aura never sends content online unless the user selects an online model.
+final llmRouterProvider = Provider<LLMRouter>((ref) {
+  return LLMRouter(
+    offlineService: ref.watch(liteRtServiceProvider),
+    onlineService: ref.watch(onlineLLMServiceProvider),
+    keyStore: ref.watch(providerApiKeyStoreProvider),
+    selectionStore: ref.watch(llmSelectionStoreProvider),
   );
 });
 
-/// The [LLMService] consumed by the [OrchestratorService] and chat flow.
-///
-/// Now backed by [EngineRouter], which delegates to the correct engine based on
-/// the active model. LiteRT initialization remains lazy — the router's
-/// [initialize] only brings up GGUF (Req 10.3).
-final llmServiceProvider = Provider<LLMService>((ref) => ref.watch(engineRouterProvider));
+/// Stable abstraction consumed by chat, voice, documents, and orchestrator.
+final llmServiceProvider = Provider<LLMService>(
+  (ref) => ref.watch(llmRouterProvider),
+);
 
-final llmIntentClassifierProvider = Provider((ref) => LLMIntentClassifier(ref.watch(llmServiceProvider)));
+final llmIntentClassifierProvider = Provider(
+  (ref) => LLMIntentClassifier(ref.watch(llmServiceProvider)),
+);
+
+/// Download service for model files (foreground service + progress reporting).
+final downloadServiceProvider = Provider<DownloadService>(
+  (ref) => DownloadService(),
+);
 
 /// Free online text-to-image generation (Pollinations.ai — no key required).
-final imageGenerationServiceProvider =
-    Provider((ref) => ImageGenerationService());
+final imageGenerationServiceProvider = Provider(
+  (ref) => ImageGenerationService(),
+);
+
+// ═══ UTILITY MODEL ECOSYSTEM ═══════════════════════════════════════════════
+
+/// Tracks availability of utility models (FunctionGemma, EmbeddingGemma) on disk.
+/// Re-exported from utility_model_manager.dart for convenience.
+// utilityModelManagerProvider is defined in utility_model_manager.dart
+
+/// FunctionGemma service — classifies natural language into device action calls.
+/// Progressive enhancement: active only when FunctionGemma model is downloaded.
+final functionGemmaServiceProvider = Provider<FunctionGemmaService>((ref) {
+  return FunctionGemmaService();
+});
+
+/// EmbeddingGemma service — produces 768-dim vectors for similarity lookups.
+/// Not true semantic embeddings yet; see EmbeddingService docs.
+/// Progressive enhancement: active only when EmbeddingGemma model is downloaded.
+final embeddingServiceProvider = Provider<EmbeddingService>((ref) {
+  return EmbeddingService();
+});

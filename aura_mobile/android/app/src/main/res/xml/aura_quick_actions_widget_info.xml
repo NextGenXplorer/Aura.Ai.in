@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  No updatePeriodMillis: this widget renders no cached data, so waking it on a
+  timer would burn battery for nothing.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="250dp"
+    android:minHeight="60dp"
+    android:minResizeWidth="180dp"
+    android:minResizeHeight="60dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="1"
+    android:initialLayout="@layout/aura_quick_actions_widget"
+    android:previewLayout="@layout/aura_quick_actions_widget"
+    android:resizeMode="horizontal"
+    android:widgetCategory="home_screen"
+    android:description="@string/widget_quick_actions_description" />

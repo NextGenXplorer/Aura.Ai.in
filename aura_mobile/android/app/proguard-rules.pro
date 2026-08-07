@@ -32,6 +32,26 @@
 -dontwarn com.google.android.play.core.**
 -dontwarn com.google.mediapipe.proto.**
 
+# ── On-device AI runtime (flutter_gemma → MediaPipe GenAI + LiteRT) ──────────
+# These native/JNI classes are loaded reflectively. R8 must not rename or strip
+# them or vision + LLM inference crashes at runtime in the release build.
+-keep class com.google.mediapipe.** { *; }
+-dontwarn com.google.mediapipe.**
+-keep class com.google.ai.edge.** { *; }
+-dontwarn com.google.ai.edge.**
+-keep class org.tensorflow.** { *; }
+-dontwarn org.tensorflow.**
+-keep class com.google.protobuf.** { *; }
+-dontwarn com.google.protobuf.**
+
+# ── Plugins that use reflection / JNI ───────────────────────────────────────
+-keep class com.google.android.gms.** { *; }
+-dontwarn com.google.android.gms.**
+# Keep native-method holders across the app (JNI entry points).
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+
 # Keep org.json classes and methods to prevent R8 from renaming JSONObject methods
 -keep class org.json.** { *; }
 -dontwarn org.json.**

@@ -539,19 +539,30 @@ class _AutomationRuleFormScreenState
           runSpacing: 10,
           children: TriggerType.values.map((type) {
             final isSelected = _triggerType == type;
+            final isAvailable = type != TriggerType.conditionBased;
             final (icon, label) = switch (type) {
               TriggerType.scheduled => (Icons.alarm_rounded, 'Once (Time)'),
               TriggerType.recurring => (Icons.loop_rounded, 'Recurring'),
-              TriggerType.conditionBased => (Icons.rule_rounded, 'Condition'),
+              TriggerType.conditionBased => (Icons.rule_rounded, 'Condition (Soon)'),
               TriggerType.conversationPattern => (Icons.chat_bubble_outline_rounded, 'Chat Pattern'),
               TriggerType.onClipboardCopy => (Icons.copy_rounded, 'Clipboard Copy'),
               TriggerType.onNotificationReceived => (Icons.notifications_active_rounded, 'Notification'),
             };
             return GestureDetector(
-              onTap: () => setState(() {
-                _triggerType = type;
-                _fieldErrors.clear();
-              }),
+              onTap: isAvailable
+                  ? () => setState(() {
+                      _triggerType = type;
+                      _fieldErrors.clear();
+                    })
+                  : () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Condition checks need background LiteRT inference and are not available yet.',
+                          ),
+                        ),
+                      );
+                    },
               child: ClayContainer(
                 width: (MediaQuery.of(context).size.width - 48) / 2,
                 borderRadius: 14,

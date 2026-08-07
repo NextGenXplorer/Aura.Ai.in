@@ -1,13 +1,14 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
+import 'package:aura_mobile/core/services/speech_chunker.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:aura_mobile/core/providers/ai_providers.dart';
 import 'package:aura_mobile/features/orchestrator/orchestrator_service.dart';
 
 final assistantAiBridgeProvider = Provider((ref) {
-  return AssistantAiBridge(ref);
+  final bridge = AssistantAiBridge(ref);
+  ref.onDispose(bridge.dispose);
+  return bridge;
 });
 
 class AssistantAiBridge {
@@ -45,35 +46,42 @@ class AssistantAiBridge {
       final query = call.arguments as String? ?? '';
       if (query.isEmpty) return;
       print('AI_BRIDGE: Processing voice query: "$query"');
-      if (_isProcessing) {
-        print('AI_BRIDGE: Already processing, queuing response');
-        await Future.delayed(const Duration(seconds: 2));
+      while (_isProcessing) {
+        print('AI_BRIDGE: Already processing, waiting to queue response');
+        await Future.delayed(const Duration(milliseconds: 250));
       }
       await _processQuery(query);
     }
   }
 
   Future<void> _processQuery(String query) async {
+    if (_isProcessing) return;
+    _isProcessing = true;
     try {
-      final llmService = _ref.read(llmServiceProvider);
+      final router = _ref.read(llmRouterProvider);
 
-      // Auto-load model if not loaded yet
-      if (!llmService.isModelLoaded) {
-        print('AI_BRIDGE: Model not loaded, attempting auto-load...');
-        final prefs = await SharedPreferences.getInstance();
-        final modelPath = prefs.getString('selected_model_path');
-        if (modelPath != null && modelPath.isNotEmpty) {
-          await llmService.initialize();
-          await llmService.loadModel(modelPath);
-          print('AI_BRIDGE: Model auto-loaded');
-        } else {
-          await _sendResponse('Please open the app and download a model first.');
+      // Restore the user's explicit local or online selection if needed.
+      if (!router.isModelLoaded) {
+        print('AI_BRIDGE: Model not loaded, attempting restore...');
+        await router.initialize();
+        await router.restoreActiveSelection();
+        if (!router.isModelLoaded) {
+          await _sendResponse(
+            'Please open the app and select a local or online model first.',
+          );
           return;
         }
+        print('AI_BRIDGE: Active model restored');
       }
 
-      // Wait briefly if model might be busy from a text chat
-      await Future.delayed(const Duration(milliseconds: 300));
+      // The engine serves one generation at a time. Wait for an in-flight text
+      // chat or Brain request instead of failing the spoken question.
+      if (!await router.waitUntilIdle()) {
+        await _sendResponse(
+          'Aura is still finishing another reply. Ask again.',
+        );
+        return;
+      }
 
       print('AI_BRIDGE: Model ready, calling orchestrator...');
       final orchestrator = _ref.read(orchestratorServiceProvider);
@@ -83,70 +91,66 @@ class AssistantAiBridge {
         try {
           final stream = orchestrator.processMessage(
             message: query,
-            chatHistory: [],
+            chatHistory: _recentTurns(),
             hasDocuments: false,
             isVoiceQuery: true,
+            isVoice: true,
           );
 
-          String fullText = '';
-          bool sentAnything = false;
+          final chunker = SpeechChunker();
+          final spoken = StringBuffer();
+          var sentAnything = false;
+          var dismissed = false;
 
-          await for (final chunk in stream) {
-            fullText += chunk;
-
-            // Check for dismiss marker — close overlay after action
-            if (fullText.contains('__DISMISS__')) {
-              fullText = fullText.replaceAll('__DISMISS__', '').trim();
-              // Send any remaining text before dismissing
-              if (fullText.isNotEmpty) {
-                final cleaned = _stripMarkdown(fullText);
-                if (cleaned.trim().isNotEmpty) {
-                  await _channel.invokeMethod('sendAIChunk', cleaned);
-                  sentAnything = true;
-                }
-              }
-              // Signal completion and dismiss
-              await _channel.invokeMethod('sendAIComplete', null);
-              print('AI_BRIDGE: __DISMISS__ received — closing overlay');
-              return;
-            }
-
-            // Check for hallucination markers
-            final cutIdx = _findHallucinationMarker(fullText);
-            if (cutIdx >= 0) {
-              fullText = fullText.substring(0, cutIdx).trimRight();
-              break;
-            }
-
-            // Extract complete sentences and send them for TTS
-            final extracted = _extractCompleteSentences(fullText);
-            if (extracted.sentences.isNotEmpty) {
-              final cleaned = _stripMarkdown(extracted.sentences);
-              if (cleaned.trim().isNotEmpty) {
-                await _channel.invokeMethod('sendAIChunk', cleaned);
-                sentAnything = true;
-              }
-              fullText = extracted.remainder;
-            }
+          Future<void> speak(String text) async {
+            final cleaned = _stripMarkdown(text).trim();
+            if (cleaned.isEmpty) return;
+            await _channel.invokeMethod('sendAIChunk', cleaned);
+            sentAnything = true;
           }
 
-          // Send remaining text
-          if (fullText.trim().isNotEmpty) {
-            final cleaned = _stripMarkdown(fullText.trim());
-            if (cleaned.trim().isNotEmpty) {
-              await _channel.invokeMethod('sendAIChunk', cleaned);
-              sentAnything = true;
+          await for (final rawChunk in stream) {
+            var chunk = rawChunk;
+            if (chunk.contains('__DISMISS__')) {
+              chunk = chunk.replaceAll('__DISMISS__', '');
+              dismissed = true;
             }
+
+            // Keep only text generated before any hallucinated turn marker.
+            final candidate = spoken.toString() + chunk;
+            final markerIdx = _findHallucinationMarker(candidate);
+            var truncated = false;
+            if (markerIdx >= 0) {
+              chunk = markerIdx > spoken.length
+                  ? candidate.substring(spoken.length, markerIdx)
+                  : '';
+              truncated = true;
+            }
+
+            spoken.write(chunk);
+            chunker.add(chunk);
+            String? ready;
+            while ((ready = chunker.takeChunk()) != null) {
+              await speak(ready!);
+            }
+            if (truncated || dismissed) break;
           }
 
-          if (!sentAnything) {
+          final tail = chunker.drain();
+          if (tail != null) await speak(tail);
+          _rememberTurn(query, spoken.toString());
+
+          if (!sentAnything && !dismissed) {
             if (attempt == 0) {
-              // First attempt failed silently — retry after a pause
               print('AI_BRIDGE: No output on attempt $attempt, retrying...');
               await Future.delayed(const Duration(seconds: 1));
+              await router.waitUntilIdle();
               continue;
             }
-            await _channel.invokeMethod('sendAIChunk', 'Sorry, I could not generate a response.');
+            await _channel.invokeMethod(
+              'sendAIChunk',
+              'Sorry, I could not answer that. Please try again.',
+            );
           }
 
           await _channel.invokeMethod('sendAIComplete', null);
@@ -156,6 +160,7 @@ class AssistantAiBridge {
           print('AI_BRIDGE: Attempt $attempt failed: $e');
           if (attempt == 0) {
             await Future.delayed(const Duration(seconds: 1));
+            await router.waitUntilIdle();
             continue; // Retry
           }
           rethrow; // Let outer catch handle it
@@ -164,9 +169,36 @@ class AssistantAiBridge {
     } catch (e) {
       print('AI_BRIDGE: ERROR: $e');
       try {
-        await _channel.invokeMethod('sendAIChunk', 'Sorry, something went wrong. Please try again.');
+        await _channel.invokeMethod(
+          'sendAIChunk',
+          'Sorry, something went wrong. Please try again.',
+        );
         await _channel.invokeMethod('sendAIComplete', null);
       } catch (_) {}
+    } finally {
+      _isProcessing = false;
+    }
+  }
+
+  void dispose() {
+    _pollTimer?.cancel();
+    _channel.setMethodCallHandler(null);
+  }
+
+  /// Short rolling transcript so spoken follow-ups ("what about tomorrow?")
+  /// keep context, mirroring the in-app voice conversation.
+  final List<String> _voiceTurns = [];
+
+  List<String> _recentTurns() => List<String>.unmodifiable(_voiceTurns);
+
+  void _rememberTurn(String question, String answer) {
+    final cleanAnswer = _stripMarkdown(answer).trim();
+    if (cleanAnswer.isEmpty) return;
+    _voiceTurns
+      ..add('User: $question')
+      ..add('Assistant: $cleanAnswer');
+    while (_voiceTurns.length > 4) {
+      _voiceTurns.removeAt(0);
     }
   }
 
@@ -178,8 +210,13 @@ class AssistantAiBridge {
 
   int _findHallucinationMarker(String text) {
     const markers = [
-      '<|endoftext|>', '<|im_end|>', '<|im_start|>',
-      '\nHuman:', '\nUser:', 'Human: ', 'User: ',
+      '<|endoftext|>',
+      '<|im_end|>',
+      '<|im_start|>',
+      '\nHuman:',
+      '\nUser:',
+      'Human: ',
+      'User: ',
     ];
     int earliest = -1;
     for (final m in markers) {
@@ -189,30 +226,6 @@ class AssistantAiBridge {
       }
     }
     return earliest;
-  }
-
-  _SentenceExtraction _extractCompleteSentences(String text) {
-    int lastBoundary = -1;
-    for (int i = 0; i < text.length - 1; i++) {
-      final c = text[i];
-      if (c == '.' || c == '!' || c == '?') {
-        final next = text[i + 1];
-        if (next == ' ' || next == '\n' || next == '\r') {
-          lastBoundary = i + 1;
-        }
-      } else if (c == '\n') {
-        lastBoundary = i + 1;
-      }
-    }
-
-    if (lastBoundary > 0) {
-      return _SentenceExtraction(
-        sentences: text.substring(0, lastBoundary).trim(),
-        remainder: text.substring(lastBoundary),
-      );
-    }
-
-    return _SentenceExtraction(sentences: '', remainder: text);
   }
 
   String _stripMarkdown(String text) {
@@ -232,10 +245,4 @@ class AssistantAiBridge {
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
   }
-}
-
-class _SentenceExtraction {
-  final String sentences;
-  final String remainder;
-  _SentenceExtraction({required this.sentences, required this.remainder});
 }

@@ -70,11 +70,15 @@ class AssistantForegroundService : Service() {
     private var pendingCallContacts: List<DeviceControlService.ContactMatch> = emptyList()
 
     private var isWaitingForAI = false
+
+    /** True only when the user cancelled the current AI turn. Late chunks that
+     * arrive after the timeout are still spoken unless this is set. */
+    private var aiTurnCancelled = false
     private val aiTimeoutHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val aiTimeoutRunnable = Runnable {
         if (isWaitingForAI) {
             isWaitingForAI = false
-            ttsManager.speak("AI is taking too long. Please try again.")
+            ttsManager.speak("That is taking a while. I will speak as soon as the answer is ready.")
             broadcastState("IDLE")
         }
     }
@@ -95,6 +99,18 @@ class AssistantForegroundService : Service() {
         Log.d("AuraAssistant", "Service Created")
 
         createNotificationChannel()
+
+        // Go foreground IMMEDIATELY, before any heavy setup. Android gives a
+        // service started via startForegroundService() only ~5 seconds to call
+        // startForeground(); the TTS engine, speech recognizer, overlay views
+        // and sensor listeners initialised below can exceed that on low-end
+        // devices, which the system reports as "app not responding". Calling it
+        // first satisfies the contract in milliseconds.
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        } catch (e: Exception) {
+            Log.e("AuraAssistant", "startForeground in onCreate failed: ${e.message}")
+        }
 
         overlayManager = OverlayManager(this)
         deviceControlService = DeviceControlService(this)
@@ -184,13 +200,16 @@ class AssistantForegroundService : Service() {
 
         // Set up static streaming callbacks so MainActivity can push chunks/completion
         onAiChunk = { chunk ->
-            if (isWaitingForAI) {
-                // Reset timeout on every chunk to prevent infinite hang if the language model stalls midway
+            // A slow first token used to trip the timeout, after which every
+            // chunk was discarded and the user heard nothing. Speak late answers
+            // too, unless the user explicitly cancelled this turn.
+            if (!aiTurnCancelled) {
                 aiTimeoutHandler.removeCallbacks(aiTimeoutRunnable)
-                aiTimeoutHandler.postDelayed(aiTimeoutRunnable, AI_TIMEOUT_MS)
+                if (isWaitingForAI) {
+                    aiTimeoutHandler.postDelayed(aiTimeoutRunnable, AI_TIMEOUT_MS)
+                }
 
-                // If going from processing to speaking
-                if (currentState == "PROCESSING") {
+                if (currentState == "PROCESSING" || currentState == "IDLE") {
                     broadcastState("SPEAKING")
                 }
                 ttsManager.speakQueued(chunk)
@@ -198,12 +217,15 @@ class AssistantForegroundService : Service() {
         }
 
         onAiComplete = {
+            val wasCancelled = aiTurnCancelled
             isWaitingForAI = false
             aiTimeoutHandler.removeCallbacks(aiTimeoutRunnable)
-            // After AI responds, keep listening for follow-up conversation
-            ttsManager.onAllSpoken {
-                broadcastState("LISTENING")
-                voiceRecognitionService.startListening()
+            if (!wasCancelled) {
+                // After AI responds, keep listening for follow-up conversation
+                ttsManager.onAllSpoken {
+                    broadcastState("LISTENING")
+                    voiceRecognitionService.startListening()
+                }
             }
         }
 
@@ -236,6 +258,7 @@ class AssistantForegroundService : Service() {
         isWaitingForMessage = false
         isWaitingForContactSelection = false
         isWaitingForAI = false
+        aiTurnCancelled = true
         aiTimeoutHandler.removeCallbacks(aiTimeoutRunnable)
         pendingCommand = null
         broadcastState("IDLE")
@@ -253,7 +276,8 @@ class AssistantForegroundService : Service() {
         sendBroadcast(intent)
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    /** Builds the ongoing foreground notification for the assistant. */
+    private fun buildNotification(): android.app.Notification {
         val notificationIntent = Intent(this, com.aura.mobile.aura_mobile.MainActivity::class.java)
         val openPendingIntent = PendingIntent.getActivity(
             this, 0, notificationIntent,
@@ -265,16 +289,35 @@ class AssistantForegroundService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("AURA Assistant")
             .setContentText("Shake, bubble, or tap Listen to activate")
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setSmallIcon(com.aura.mobile.aura_mobile.R.drawable.ic_notification)
             .setContentIntent(openPendingIntent)
-            .addAction(android.R.drawable.ic_btn_speak_now, "\uD83C\uDFA4 Listen", listenPendingIntent)
+            .addAction(com.aura.mobile.aura_mobile.R.drawable.ic_notification, "\uD83C\uDFA4 Listen", listenPendingIntent)
             .setOngoing(true)
-            .build()
 
-        startForeground(NOTIFICATION_ID, notification)
+        // Full-colour AURA logo shown as the large icon on the right.
+        try {
+            val logo = android.graphics.BitmapFactory.decodeResource(
+                resources, com.aura.mobile.aura_mobile.R.mipmap.ic_launcher
+            )
+            if (logo != null) builder.setLargeIcon(logo)
+        } catch (e: Exception) {
+            Log.e("AuraAssistant", "Large icon decode failed: ${e.message}")
+        }
+
+        return builder.build()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Foreground was already started in onCreate; re-assert it defensively in
+        // case the service is being redelivered (START_STICKY) after a restart.
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        } catch (e: Exception) {
+            Log.e("AuraAssistant", "startForeground in onStartCommand failed: ${e.message}")
+        }
         return START_STICKY
     }
 
@@ -431,8 +474,9 @@ class AssistantForegroundService : Service() {
 
     private fun requestAIProcessing(text: String) {
         isWaitingForAI = true
+        aiTurnCancelled = false
         broadcastState("PROCESSING")
-        ttsManager.speak("Let me think about that.")
+        ttsManager.speak("One moment.")
 
         // Direct call if Flutter engine is alive, otherwise launch MainActivity
         val handler = aiRequestHandler

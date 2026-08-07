@@ -18,7 +18,7 @@ class ContextWindowIndicator extends ConsumerWidget {
 
     return Container(
       height: 36,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: const Color(0xFFEFECE6),
         borderRadius: BorderRadius.circular(10),
@@ -27,7 +27,7 @@ class ContextWindowIndicator extends ConsumerWidget {
         children: [
           // Progress bar
           Expanded(
-            flex: 3,
+            flex: 2,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(4),
               child: LinearProgressIndicator(
@@ -38,38 +38,66 @@ class ContextWindowIndicator extends ConsumerWidget {
               ),
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
 
-          // Token count label
-          Text(
-            '${state.estimatedTokens} / ${state.maxTokens} tokens',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w500,
-              color: color,
-            ),
-          ),
-          const SizedBox(width: 10),
-
-          // Turn counter
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.10),
-              borderRadius: BorderRadius.circular(6),
-            ),
+          // Token count label. Flexible + ellipsis so a large context window
+          // (e.g. 1M-token models) can never overflow the row.
+          Flexible(
             child: Text(
-              '${state.currentTurns} / ${state.maxTurns} turns',
+              '${_formatCount(state.estimatedTokens)} / '
+              '${_formatCount(state.maxTokens)} tokens',
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontSize: 11,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w500,
                 color: color,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+
+          // Turn counter
+          Flexible(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '${state.currentTurns} / ${state.maxTurns} turns',
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: color,
+                ),
               ),
             ),
           ),
         ],
       ),
     );
+  }
+
+  /// Abbreviates large counts so the label stays compact: 54 -> "54",
+  /// 12_400 -> "12.4K", 1_000_000 -> "1M".
+  static String _formatCount(int value) {
+    if (value < 1000) return '$value';
+    if (value < 1000000) {
+      final thousands = value / 1000;
+      return thousands >= 100
+          ? '${thousands.round()}K'
+          : '${thousands.toStringAsFixed(1)}K';
+    }
+    final millions = value / 1000000;
+    return millions == millions.roundToDouble()
+        ? '${millions.round()}M'
+        : '${millions.toStringAsFixed(1)}M';
   }
 
   /// Maps the [ContextWindowColorState] to the appropriate display color.

@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:aura_mobile/core/providers/ai_providers.dart';
 import 'package:aura_mobile/data/datasources/llm_service.dart';
 import 'package:aura_mobile/domain/services/context_builder_service.dart';
 
@@ -48,16 +49,15 @@ class ContextWindowState {
 
 final contextWindowProvider =
     StateNotifierProvider<ContextWindowNotifier, ContextWindowState>((ref) {
-  return ContextWindowNotifier(ref);
-});
+      return ContextWindowNotifier(ref);
+    });
 
 // ─── Notifier ────────────────────────────────────────────────────────────────
 
 class ContextWindowNotifier extends StateNotifier<ContextWindowState> {
   final Ref _ref;
 
-  ContextWindowNotifier(this._ref)
-      : super(const ContextWindowState());
+  ContextWindowNotifier(this._ref) : super(const ContextWindowState());
 
   // ─── Pure functions ──────────────────────────────────────────────────────
 
@@ -72,7 +72,10 @@ class ContextWindowNotifier extends StateNotifier<ContextWindowState> {
   ///   normal:   tokens <= 75% of max  (≤ 3072 for 4096)
   ///   warning:  tokens > 75% and <= 90%  (≤ 3686 for 4096)
   ///   critical: tokens > 90%
-  static ContextWindowColorState colorStateForTokens(int tokens, int maxTokens) {
+  static ContextWindowColorState colorStateForTokens(
+    int tokens,
+    int maxTokens,
+  ) {
     if (maxTokens <= 0) return ContextWindowColorState.normal;
     final ratio = tokens / maxTokens;
     if (ratio > 0.90) return ContextWindowColorState.critical;
@@ -83,7 +86,10 @@ class ContextWindowNotifier extends StateNotifier<ContextWindowState> {
   /// Calculate the effective turn count from a messages list.
   /// A "turn" = 1 user message + 1 assistant response = 2 entries.
   /// Returns min(messages.length ~/ 2, maxTurnsForTier).
-  static int calculateTurns(List<Map<String, String>> messages, ModelTier tier) {
+  static int calculateTurns(
+    List<Map<String, String>> messages,
+    ModelTier tier,
+  ) {
     if (messages.isEmpty) return 0;
     final rawTurns = messages.length ~/ 2;
     return rawTurns < maxTurnsForTier(tier) ? rawTurns : maxTurnsForTier(tier);
@@ -127,11 +133,12 @@ class ContextWindowNotifier extends StateNotifier<ContextWindowState> {
       );
     } else {
       // Extract the last user message.
-      final lastUserMessage = messages
-          .lastWhere(
+      final lastUserMessage =
+          messages.lastWhere(
             (m) => m['role'] == 'user',
             orElse: () => {'role': 'user', 'content': ''},
-          )['content'] ?? '';
+          )['content'] ??
+          '';
 
       // Convert message maps to chat history strings.
       final chatHistory = messages.map((m) {
@@ -183,14 +190,19 @@ class ContextWindowNotifier extends StateNotifier<ContextWindowState> {
   }
 
   /// Update the model tier (called when the user switches models).
-  /// Recalculates maxTurns and colorState accordingly.
+  ///
+  /// The context limit is re-read from the active engine at the same time, so
+  /// the indicator reflects the real window of the selected model (a large
+  /// online context is no longer displayed as if it were 4096 tokens).
   void updateModelTier(ModelTier tier) {
     final newMaxTurns = maxTurnsForTier(tier);
-    final newColor = colorStateForTokens(state.estimatedTokens, state.maxTokens);
+    final newMaxTokens = _ref.read(llmServiceProvider).contextTokens;
+    final newColor = colorStateForTokens(state.estimatedTokens, newMaxTokens);
 
     state = state.copyWith(
       modelTier: tier,
       maxTurns: newMaxTurns,
+      maxTokens: newMaxTokens,
       colorState: newColor,
     );
   }
@@ -201,7 +213,10 @@ class ContextWindowNotifier extends StateNotifier<ContextWindowState> {
     // Length of "Assistant: " prefix is 11 plus newline is 12 characters.
     final addedChars = currentText.isNotEmpty ? currentText.length + 12 : 0;
     final addedTokens = (addedChars / 4).ceil();
-    final newColor = colorStateForTokens(baselineTokens + addedTokens, state.maxTokens);
+    final newColor = colorStateForTokens(
+      baselineTokens + addedTokens,
+      state.maxTokens,
+    );
 
     state = state.copyWith(
       estimatedTokens: baselineTokens + addedTokens,

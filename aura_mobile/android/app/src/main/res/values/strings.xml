@@ -1,4 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="accessibility_service_description">AURA AI uses this accessibility service to read on-screen content so it can help you summarize, translate, explain, and extract information from whatever is currently displayed. No data is sent externally — all processing happens on your device.</string>
+
+    <!-- Briefing widget -->
+    <string name="widget_name">AURA Briefing</string>
+    <string name="widget_description">Scrollable news headlines with weather and a live clock. Tap a headline to read it.</string>
+    <string name="widget_refresh_label">Refresh</string>
+    <string name="widget_news_empty">Tap ↻ to load today\'s headlines</string>
+    <string name="widget_weather_placeholder">Weather unavailable</string>
+
+    <!-- Quick actions widget -->
+    <string name="widget_quick_actions_name">AURA Quick Actions</string>
+    <string name="widget_quick_actions_description">One-tap shortcuts to ask AURA, talk, scan, or generate an image.</string>
+    <string name="widget_action_ask">Ask</string>
+    <string name="widget_action_voice">Voice</string>
+    <string name="widget_action_scan">Scan</string>
+    <string name="widget_action_image">Image</string>
+
+    <!-- Study widget -->
+    <string name="widget_study_name">AURA Study</string>
+    <string name="widget_study_description">Cards due for review, your streak, and a countdown to the next exam.</string>
+    <string name="widget_study_quiz">QUIZ</string>
+    <string name="widget_study_cards_due">cards due</string>
 </resources>

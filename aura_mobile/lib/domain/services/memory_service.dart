@@ -1,32 +1,38 @@
 import 'package:flutter/material.dart';
-import 'package:aura_mobile/ai/run_anywhere_service.dart';
 import 'package:aura_mobile/domain/repositories/memory_repository.dart';
 import 'package:aura_mobile/domain/entities/memory.dart';
-import 'package:aura_mobile/domain/services/vector_store_service.dart';
 import 'package:aura_mobile/domain/services/date_time_parser.dart';
 import 'package:aura_mobile/core/services/notification_service.dart';
-import 'package:aura_mobile/core/providers/ai_providers.dart';
+import 'package:aura_mobile/core/services/utility_model_manager.dart';
 import 'package:aura_mobile/core/providers/repository_providers.dart';
+import 'package:aura_mobile/core/providers/ai_providers.dart';
 import 'package:aura_mobile/core/errors/app_exceptions.dart';
 import 'package:aura_mobile/core/services/error_handler_service.dart';
+import 'package:aura_mobile/data/datasources/embedding_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
-final memoryServiceProvider = Provider((ref) => MemoryService(
-  ref.read(runAnywhereProvider),
-  ref.read(memoryRepositoryProvider),
-  VectorStoreService(),
-));
+final memoryServiceProvider = Provider(
+  (ref) => MemoryService(
+    ref.read(memoryRepositoryProvider),
+    ref.read(utilityModelManagerProvider.notifier),
+    ref.read(embeddingServiceProvider),
+  ),
+);
 
 class MemoryService {
-  final RunAnywhere _aiService;
   final MemoryRepository _repository;
-  final VectorStoreService _vectorStore;
+  final UtilityModelManager _utilityModelManager;
+  final EmbeddingService _embeddingService;
   final DateTimeParser _dateTimeParser = DateTimeParser();
   final NotificationService _notificationService = NotificationService();
   final ErrorHandlerService _errorHandler = ErrorHandlerService();
 
-  MemoryService(this._aiService, this._repository, this._vectorStore);
+  MemoryService(
+    this._repository,
+    this._utilityModelManager,
+    this._embeddingService,
+  );
 
   /// Save a memory with robust error handling
   Future<void> saveMemory(String content) async {
@@ -56,30 +62,13 @@ class MemoryService {
         // Continue without date/time
       }
 
-      // 3. Generate Embedding (critical operation)
+      // 3. Generate embedding if EmbeddingGemma is available (progressive enhancement)
       List<double> embedding = [];
-
-      if (!_aiService.isModelLoaded) {
-        _errorHandler.logWarning(
-          'AI model not loaded when saving memory. Saving without embeddings.',
-        );
-        // Continue without embeddings - we can use keyword search as fallback
-      } else {
+      if (_utilityModelManager.state.isEmbeddingGemmaAvailable) {
         try {
-          embedding = await _errorHandler.executeWithRetry(
-            operation: () => _aiService.getEmbeddings(content),
-            operationName: 'Generate memory embedding',
-            maxAttempts: 2,
-            onFinalError: (error) {
-              _errorHandler.logWarning(
-                'Failed to generate embedding for memory after retries: $error',
-              );
-              return <double>[]; // Return empty list to continue without embeddings
-            },
-          ) ?? [];
+          embedding = await _embeddingService.embed(content);
         } catch (e) {
           _errorHandler.logWarning('Embedding generation failed: $e');
-          // Continue without embeddings
         }
       }
 
@@ -125,9 +114,10 @@ class MemoryService {
   }
 
   /// Retrieve relevant memories with robust error handling and fallbacks.
-  /// 
-  /// Performance optimization: Uses keyword pre-filtering before vector search
-  /// to avoid scanning all memories when the DB grows large.
+  ///
+  /// Uses vector similarity when an embedding model is available (a weak
+  /// lexical vectoriser today, not true semantic embeddings) and otherwise
+  /// keyword pre-filtering, which is the active path.
   Future<List<String>> retrieveRelevantMemories(
     String query, {
     int limit = 3,
@@ -139,6 +129,40 @@ class MemoryService {
     }
 
     try {
+      // Progressive Enhancement: use semantic search if EmbeddingGemma available
+      if (_utilityModelManager.state.isEmbeddingGemmaAvailable) {
+        try {
+          final queryEmbedding = await _embeddingService.embed(query);
+          if (queryEmbedding.isNotEmpty) {
+            // Cosine similarity search against stored embeddings
+            final allMemories = await _repository.getMemories();
+            final withEmbeddings = allMemories
+                .where((m) => m.embedding != null && m.embedding!.isNotEmpty)
+                .toList();
+            if (withEmbeddings.isNotEmpty) {
+              final scored = withEmbeddings.map((m) {
+                final score = EmbeddingService.cosineSimilarity(
+                  queryEmbedding,
+                  m.embedding!,
+                );
+                return MapEntry(m, score);
+              }).toList()..sort((a, b) => b.value.compareTo(a.value));
+
+              return scored
+                  .take(limit)
+                  .where((e) => e.value > 0.5)
+                  .map((e) => e.key.content)
+                  .toList();
+            }
+          }
+        } catch (e) {
+          _errorHandler.logWarning(
+            'Semantic search failed, using keyword fallback: $e',
+          );
+        }
+      }
+
+      // Fallback: keyword-based search (existing behavior)
       // 1. Try keyword search first (cheap, indexed by SQLite)
       List<Memory> candidates;
       try {
@@ -163,35 +187,7 @@ class MemoryService {
         return candidates.map((m) => m.content).toList();
       }
 
-      // 3. Try vector re-ranking on the keyword candidates (not ALL memories)
-      if (_aiService.isModelLoaded) {
-        try {
-          final queryEmbedding = await _errorHandler.executeWithRetry(
-            operation: () => _aiService.getEmbeddings(query),
-            operationName: 'Generate query embedding',
-            maxAttempts: 2,
-          );
-
-          if (queryEmbedding != null && queryEmbedding.isNotEmpty) {
-            final vectorResults = _performVectorSearch(
-              queryEmbedding,
-              candidates, // Re-rank only the keyword-filtered candidates
-              limit,
-            );
-
-            if (vectorResults.isNotEmpty) {
-              _errorHandler.logDebug(
-                'Vector re-rank returned ${vectorResults.length} results from ${candidates.length} candidates',
-              );
-              return vectorResults;
-            }
-          }
-        } catch (e) {
-          _errorHandler.logWarning('Vector re-ranking failed: $e. Using keyword results.');
-        }
-      }
-
-      // 4. Fallback: return top keyword results
+      // 3. Return top keyword results directly.
       return candidates.take(limit).map((m) => m.content).toList();
     } catch (e) {
       if (e is AuraException) {
@@ -200,47 +196,6 @@ class MemoryService {
       }
 
       _errorHandler.logWarning('Memory retrieval failed: $e');
-      return [];
-    }
-  }
-
-  /// Perform vector similarity search
-  List<String> _performVectorSearch(
-    List<double> queryEmbedding,
-    List<Memory> memories,
-    int limit,
-  ) {
-    try {
-      // Calculate similarities
-      final scoredMemories = memories
-          .where((mem) => mem.embedding != null && mem.embedding!.isNotEmpty)
-          .map((mem) {
-        try {
-          final score = _vectorStore.cosineSimilarity(
-            queryEmbedding,
-            mem.embedding!,
-          );
-          return MapEntry(mem, score);
-        } catch (e) {
-          _errorHandler.logDebug(
-            'Similarity calculation failed for memory ${mem.id}: $e',
-          );
-          return MapEntry(mem, 0.0);
-        }
-      }).toList();
-
-      // Sort by score (descending)
-      scoredMemories.sort((a, b) => b.value.compareTo(a.value));
-
-      // Filter by threshold and limit
-      const double similarityThreshold = 0.7;
-      return scoredMemories
-          .take(limit)
-          .where((entry) => entry.value > similarityThreshold)
-          .map((entry) => entry.key.content)
-          .toList();
-    } catch (e) {
-      _errorHandler.logWarning('Vector search processing failed: $e');
       return [];
     }
   }

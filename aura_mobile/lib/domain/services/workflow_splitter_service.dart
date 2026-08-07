@@ -44,6 +44,12 @@ class WorkflowSplitterService {
     if (trimmed.length < 5) return null;
 
     final wordCount = trimmed.split(RegExp(r'\s+')).length;
+    final lo = trimmed.toLowerCase();
+
+    // Guard: Skip workflow splitting for messages that are clearly questions
+    // or conversational requests (not multi-step device commands).
+    // Questions about food, knowledge, opinions, etc. should go straight to chat.
+    if (_isConversationalQuery(lo)) return null;
 
     // 1. Rule-based split (Fast Layer)
     if (_hasConnectorRe.hasMatch(trimmed)) {
@@ -66,6 +72,36 @@ class WorkflowSplitterService {
     }
 
     return null;
+  }
+
+  /// Returns true if the message is a conversational question/request that
+  /// should NOT be split into workflow steps. These go straight to the LLM
+  /// for a direct chat response.
+  bool _isConversationalQuery(String lo) {
+    // Questions starting with question words
+    if (RegExp(
+      r'^(what|how|why|when|where|who|which|can|could|would|should|do|does|is|are|tell|explain|describe|suggest|recommend|help|give)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      return true;
+    }
+    // "I want to know/learn/understand..." — knowledge requests
+    if (RegExp(
+      r'^i\s+(want|need|would\s+like)\s+to\s+(know|learn|understand|find\s+out|hear|see|get\s+info)',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      return true;
+    }
+    // Messages ending with a question mark
+    if (lo.endsWith('?')) return true;
+    // Doesn't contain any action keywords that would make it a multi-step command
+    if (!RegExp(
+      r'\b(open|launch|call|dial|text|send|set|remind|navigate|search|turn|toggle|play|book|order|share|download)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      return true;
+    }
+    return false;
   }
 
   List<WorkflowStep> _ruleSplit(String message) {

@@ -33,74 +33,79 @@ class ContextBuilderService {
     bool includeMemories = true,
     bool includeDocuments = true,
   }) async {
+    final systemContext = await buildSystemContext(
+      userMessage: userMessage,
+      chatHistory: chatHistory,
+      includeMemories: includeMemories,
+      includeDocuments: includeDocuments,
+    );
+    return '$systemContext\n\n$userMessage';
+  }
+
+  /// Build ONLY the system context (persona + memories + docs + history).
+  /// The user message is NOT included — caller passes it separately to chat().
+  /// This allows the prompt template to properly separate system vs user roles.
+  Future<String> buildSystemContext({
+    required String userMessage,
+    required List<String> chatHistory,
+    bool includeMemories = true,
+    bool includeDocuments = true,
+  }) async {
     final buffer = StringBuffer();
 
-    // 1. System Instruction — short for small/medium models, detailed for large
+    // 1. System Instruction
+    final basePrompt = personaSystemPrompt ??
+        'You are AURA, a helpful, knowledgeable AI assistant. '
+        'You provide detailed, accurate, and helpful responses to any question.';
+
     if (modelTier.isSmall || modelTier == ModelTier.medium) {
-      final basePrompt = personaSystemPrompt ??
-          "You are AURA, a helpful AI assistant.";
-      buffer.writeln("$basePrompt Be concise. Answer the user's question and stop. Never repeat yourself or add extra content.");
+      buffer.writeln(basePrompt);
     } else {
-      final basePrompt = personaSystemPrompt ??
-          "You are AURA, a privacy-first offline AI assistant. Answer concisely and helpfully.";
-      buffer.writeln("$basePrompt "
-          "IMPORTANT RULES: "
-          "1. Answer ONLY the user's question. Once done, STOP. Never continue with unrelated topics or fake follow-up questions. "
-          "2. For casual messages (greetings, small talk), respond naturally and briefly. "
-          "3. Only state facts you are confident about. If unsure, say so — never make up information. "
-          "4. When context (memories, documents, or search results) is provided below, use it strictly. "
-          "5. For code: write the code, add a brief explanation, then STOP. Do not generate additional unrelated content. "
-          "6. Never generate text like 'Human:', 'User:', or fake conversation turns.");
+      buffer.writeln('$basePrompt '
+          'Answer the user thoroughly. Be natural and conversational. '
+          'If you don\'t know something, say so honestly.');
     }
 
-    // 2. Memory Context — fewer for small/medium models to save context window
+    // 2. Memory Context
     if (includeMemories) {
       final memories = await _getMemoriesCached(userMessage);
       if (memories.isNotEmpty) {
         final limit = (modelTier.isSmall || modelTier == ModelTier.medium) ? 2 : 3;
         final topMemories = memories.take(limit).toList();
-        buffer.writeln("\nMemories:");
+        buffer.writeln('\nRelevant context:');
         for (var mem in topMemories) {
-          buffer.writeln("- $mem");
+          buffer.writeln('- $mem');
         }
       }
     }
 
-    // 3. Document Context — fewer chunks for small/medium models
+    // 3. Document Context
     if (includeDocuments) {
       final docContext = await _documentService.retrieveRelevantContext(userMessage);
       if (docContext.isNotEmpty) {
         final limit = (modelTier.isSmall || modelTier == ModelTier.medium) ? 1 : 2;
         final topDocs = docContext.take(limit).toList();
-        buffer.writeln("\nDocument Context:");
+        buffer.writeln('\nDocument context:');
         for (var chunk in topDocs) {
           buffer.writeln(chunk);
         }
       }
     }
 
-    // 4. Chat History — fewer turns for small/medium models to save context window.
-    // With the 4096-token context window the engines now use, larger models can
-    // retain a much longer conversation for coherent multi-turn memory.
+    // 4. Chat History
     if (chatHistory.isNotEmpty) {
-      // Small/medium (0.5B/1.5B): keep only last 4 turns — history beyond that
-      // overflows their effective context and causes repetition/hallucination.
       final historyLimit = (modelTier.isSmall || modelTier == ModelTier.medium) ? 4 : 10;
-      buffer.writeln("\n--- PREVIOUS CONVERSATION (do not repeat) ---");
       final limitedHistory = chatHistory.length > historyLimit
           ? chatHistory.sublist(chatHistory.length - historyLimit)
           : chatHistory;
 
+      buffer.writeln('\nConversation so far:');
       for (var msg in limitedHistory) {
         buffer.writeln(msg);
       }
-      buffer.writeln("--- END ---\n");
     }
 
-    buffer.writeln("CURRENT USER REQUEST: \"$userMessage\"");
-    buffer.writeln("ASSISTANT RESPONSE:");
-
-    return buffer.toString();
+    return buffer.toString().trim();
   }
 
   String injectMemory(List<String> memories, String message) {

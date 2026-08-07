@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:aura_mobile/core/providers/ai_providers.dart';
 import 'package:aura_mobile/core/services/device_service.dart';
-import 'package:aura_mobile/domain/entities/ai_engine.dart';
+import 'package:aura_mobile/core/services/utility_model_manager.dart';
 import 'package:aura_mobile/domain/entities/model_info.dart';
+import 'package:aura_mobile/presentation/pages/online_provider_settings_screen.dart';
 import 'package:aura_mobile/presentation/providers/model_catalog_grouping.dart';
 import 'package:aura_mobile/presentation/providers/model_selector_provider.dart';
 import 'package:aura_mobile/presentation/widgets/clay_components.dart';
@@ -16,10 +17,6 @@ final _deviceRamProvider = FutureProvider<int>((ref) async {
   return info.totalRamMB;
 });
 
-enum ModelFamilyTab { all, qwen, gemma }
-
-final _modelTabProvider = StateProvider<ModelFamilyTab>((ref) => ModelFamilyTab.all);
-
 class ModelSelectorScreen extends ConsumerWidget {
   const ModelSelectorScreen({super.key});
 
@@ -28,7 +25,7 @@ class ModelSelectorScreen extends ConsumerWidget {
     final state = ref.watch(modelSelectorProvider);
     final notifier = ref.read(modelSelectorProvider.notifier);
     final deviceRamAsync = ref.watch(_deviceRamProvider);
-    final selectedTab = ref.watch(_modelTabProvider);
+    final utilityState = ref.watch(utilityModelManagerProvider);
 
     // Device RAM: default to 0 if not yet determined (disables unsupported models).
     final int deviceRamMB = deviceRamAsync.when(
@@ -37,20 +34,9 @@ class ModelSelectorScreen extends ConsumerWidget {
       error: (_, __) => 0,
     );
 
-    // Filter available models based on selected family tab.
-    final filteredModels = state.availableModels.where((model) {
-      switch (selectedTab) {
-        case ModelFamilyTab.all:
-          return true;
-        case ModelFamilyTab.qwen:
-          return model.id.toLowerCase().contains('qwen');
-        case ModelFamilyTab.gemma:
-          return model.id.toLowerCase().contains('gemma');
-      }
-    }).toList();
-
-    // Group the filtered models by engine.
-    final groups = groupCatalogByEngine(filteredModels);
+    // Categorized model lists.
+    final chatModels = getChatModels();
+    final utilityModels = getUtilityModels();
 
     return Scaffold(
       backgroundColor: ClayColors.obsidianBg,
@@ -66,12 +52,19 @@ class ModelSelectorScreen extends ConsumerWidget {
           ),
         ),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: ClayColors.textDark, size: 20),
+          icon: const Icon(
+            Icons.arrow_back_ios_new_rounded,
+            color: ClayColors.textDark,
+            size: 20,
+          ),
           onPressed: () => Navigator.of(context).pop(),
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: ClayColors.goldAccent),
+            icon: const Icon(
+              Icons.refresh_rounded,
+              color: ClayColors.goldAccent,
+            ),
             onPressed: () => notifier.refreshModels(),
           ),
         ],
@@ -138,25 +131,92 @@ class ModelSelectorScreen extends ConsumerWidget {
               ),
             ),
 
-            // Model Family Tab Selector
+            // Online providers are configured separately because they use a
+            // user-owned API key and a live provider model catalog.
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                 child: ClayContainer(
-                  borderRadius: 18,
-                  isInset: true,
-                  depth: 4.0,
-                  baseColor: const Color(0xFFE5E2DA),
-                  highlightColor: const Color(0xFFF7F4EF),
-                  shadowColor: const Color(0xFFCBC7BE),
-                  padding: const EdgeInsets.all(6),
+                  borderRadius: 20,
+                  depth: 4,
+                  padding: const EdgeInsets.all(16),
                   child: Row(
                     children: [
-                      _buildTabButton(ref, ModelFamilyTab.all, 'All Models', selectedTab),
-                      _buildTabButton(ref, ModelFamilyTab.qwen, 'Qwen Models', selectedTab),
-                      _buildTabButton(ref, ModelFamilyTab.gemma, 'Gemma Models', selectedTab),
+                      const Icon(
+                        Icons.cloud_outlined,
+                        color: ClayColors.goldAccent,
+                        size: 24,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Online AI providers',
+                              style: GoogleFonts.outfit(
+                                color: ClayColors.textDark,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                            Text(
+                              'OpenRouter, Groq and NVIDIA NIM. Your offline models stay installed.',
+                              style: GoogleFonts.outfit(
+                                color: ClayColors.textMuted,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  const OnlineProviderSettingsScreen(),
+                            ),
+                          );
+                          notifier.refreshModels();
+                        },
+                        child: const Text('Configure'),
+                      ),
                     ],
                   ),
+                ),
+              ),
+            ),
+
+            // ═══ SECTION 1: CHAT MODELS ═══════════════════════════════════════
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 24, 16, 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'CHAT MODELS',
+                      style: GoogleFonts.outfit(
+                        color: ClayColors.goldAccent,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      deviceRamMB > 0
+                          ? 'Your device reports $deviceRamMB MB RAM. Sections below are grouped by the phone class each model targets.'
+                          : 'Grouped by the phone class each model targets.',
+                      style: GoogleFonts.outfit(
+                        color: ClayColors.textMuted,
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -165,14 +225,20 @@ class ModelSelectorScreen extends ConsumerWidget {
             if (state.activeModelId != null)
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
                   child: ClayContainer(
                     borderRadius: 20,
                     depth: 4.0,
                     baseColor: ClayColors.goldAccent.withOpacity(0.08),
                     highlightColor: ClayColors.highlight,
                     shadowColor: ClayColors.shadow,
-                    border: Border.all(color: ClayColors.goldAccent.withOpacity(0.3), width: 1.0),
+                    border: Border.all(
+                      color: ClayColors.goldAccent.withOpacity(0.3),
+                      width: 1.0,
+                    ),
                     padding: const EdgeInsets.all(16),
                     child: Row(
                       children: [
@@ -184,7 +250,7 @@ class ModelSelectorScreen extends ConsumerWidget {
                         const SizedBox(width: 12),
                         Expanded(
                           child: Text(
-                            'Active: ${state.availableModels.firstWhere((m) => m.id == state.activeModelId).name}',
+                            'Active: ${ref.watch(llmRouterProvider).activeModelName ?? state.activeModelId}',
                             style: GoogleFonts.outfit(
                               color: ClayColors.goldAccent,
                               fontSize: 14,
@@ -198,31 +264,21 @@ class ModelSelectorScreen extends ConsumerWidget {
                 ),
               ),
 
-            // Grouped model list — one section per engine
-            for (final group in groups) ...[
-              // Engine group heading
+            // Chat models, split into the three device tiers so the user can
+            // see which picks actually fit their phone.
+            for (final tier in DeviceTier.values) ...[
               SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 24, 16, 12),
-                  child: Text(
-                    _engineHeading(group.engine),
-                    style: GoogleFonts.outfit(
-                      color: ClayColors.textMuted,
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ),
+                child: _TierSectionHeader(tier: tier, deviceRamMB: deviceRamMB),
               ),
-
-              // Models within the group
               SliverPadding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 sliver: SliverList(
                   delegate: SliverChildBuilderDelegate(
                     (context, index) {
-                      final model = group.models[index];
+                      final tierModels = chatModels
+                          .where((m) => m.deviceTier == tier)
+                          .toList();
+                      final model = tierModels[index];
                       final supported = isModelSupported(model, deviceRamMB);
                       final badges = qualifyingBadges(model);
 
@@ -244,79 +300,259 @@ class ModelSelectorScreen extends ConsumerWidget {
                         ),
                         onSelect: supported
                             ? () => _handleModelSelection(
-                                  context,
-                                  ref,
-                                  model,
-                                  notifier,
-                                )
+                                context,
+                                ref,
+                                model,
+                                notifier,
+                              )
                             : null,
                       );
                     },
-                    childCount: group.models.length,
+                    childCount: chatModels
+                        .where((m) => m.deviceTier == tier)
+                        .length,
                   ),
                 ),
               ),
             ],
 
-            // Bottom Padding
-            const SliverToBoxAdapter(
-              child: SizedBox(height: 24),
+            // ═══ SECTION 2: UTILITY MODELS ═══════════════════════════════════════
+            // Only rendered when the catalog actually ships utility models.
+            // The header used to appear above an empty list.
+            if (utilityModels.isNotEmpty) ...[
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 24, 16, 12),
+                  child: Text(
+                    'UTILITY MODELS',
+                    style: GoogleFonts.outfit(
+                      color: ClayColors.goldAccent,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+              ),
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                sliver: SliverList(
+                  delegate: SliverChildBuilderDelegate((context, index) {
+                    final model = utilityModels[index];
+                    final isAvailable = _isUtilityModelAvailable(
+                      model,
+                      utilityState,
+                    );
+
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12.0),
+                      child: ClayContainer(
+                        borderRadius: 20,
+                        depth: 4.0,
+                        baseColor: ClayColors.warmGrey,
+                        highlightColor: ClayColors.highlight,
+                        shadowColor: ClayColors.shadow,
+                        padding: const EdgeInsets.all(16),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.extension_outlined,
+                              color: ClayColors.goldAccent,
+                              size: 22,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    model.name,
+                                    style: GoogleFonts.outfit(
+                                      color: ClayColors.textDark,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    model.description,
+                                    style: GoogleFonts.outfit(
+                                      color: ClayColors.textMuted,
+                                      fontSize: 12,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            if (isAvailable) ...[
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: ClayColors.greenAccent.withOpacity(
+                                    0.12,
+                                  ),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: ClayColors.greenAccent.withOpacity(
+                                      0.4,
+                                    ),
+                                  ),
+                                ),
+                                child: Text(
+                                  'Active',
+                                  style: GoogleFonts.outfit(
+                                    color: ClayColors.greenAccent,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.delete_outline_rounded,
+                                  color: ClayColors.redAccent,
+                                  size: 20,
+                                ),
+                                onPressed: () => _showDeleteConfirmation(
+                                  context,
+                                  model.name,
+                                  () => notifier.deleteModel(model.id),
+                                ),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                              ),
+                            ] else ...[
+                              Text(
+                                '${model.sizeMB.toStringAsFixed(0)} MB',
+                                style: GoogleFonts.outfit(
+                                  color: ClayColors.textHint,
+                                  fontSize: 11,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              if (state.isDownloading(model.id))
+                                SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    value: state.getProgress(model.id),
+                                    strokeWidth: 2,
+                                    color: ClayColors.goldAccent,
+                                  ),
+                                )
+                              else
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.download_rounded,
+                                    color: ClayColors.goldAccent,
+                                    size: 20,
+                                  ),
+                                  onPressed: () =>
+                                      notifier.downloadModel(model.id),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    );
+                  }, childCount: utilityModels.length),
+                ),
+              ),
+            ],
+
+            // ═══ SECTION 3: VISION MODELS ════════════════════════════════════════
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 24, 16, 12),
+                child: Text(
+                  'VISION MODELS',
+                  style: GoogleFonts.outfit(
+                    color: ClayColors.goldAccent,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
             ),
+
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: ClayContainer(
+                  borderRadius: 20,
+                  depth: 4.0,
+                  isInset: true,
+                  baseColor: const Color(0xFFE5E2DA),
+                  highlightColor: const Color(0xFFF7F4EF),
+                  shadowColor: const Color(0xFFCBC7BE),
+                  padding: const EdgeInsets.all(20),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.visibility_outlined,
+                        color: ClayColors.textHint,
+                        size: 22,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'For image understanding, download Gemma 4 E2B or E4B above — they read photos directly. Dedicated vision-only models (SmolVLM, FastVLM) are not available yet.',
+                          style: GoogleFonts.outfit(
+                            color: ClayColors.textMuted,
+                            fontSize: 13,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+            // Bottom Padding
+            const SliverToBoxAdapter(child: SizedBox(height: 24)),
           ],
         ),
       ),
     );
   }
 
-  /// Handles model selection through the EngineRouter, showing a load-failure
-  /// SnackBar on error while retaining the previous active model (Req 6.7, 6.8).
+  /// Selects an offline model through the shared router. The notifier performs
+  /// the existing RAM/file validation and persists the local selection.
   Future<void> _handleModelSelection(
     BuildContext context,
     WidgetRef ref,
     ModelInfo model,
     ModelSelectorNotifier notifier,
   ) async {
-    try {
-      final router = ref.read(engineRouterProvider);
-      await router.loadModelInfo(model);
-      // Commit selection into the provider state.
-      notifier.selectModel(model.id);
-    } catch (e) {
-      // Load failed — show error, previous active model is retained (Req 6.8).
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Failed to load ${model.name}: ${_extractMessage(e)}',
-              style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.w600),
+    await notifier.selectModel(model.id);
+    if (!context.mounted) return;
+    final error = ref.read(modelSelectorProvider).getError(model.id);
+    if (error != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Failed to load ${model.name}: $error',
+            style: GoogleFonts.outfit(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
             ),
-            backgroundColor: ClayColors.redAccent,
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 4),
           ),
-        );
-      }
-    }
-  }
-
-  /// Extracts a user-presentable message from an exception.
-  String _extractMessage(Object e) {
-    if (e is Exception) {
-      final str = e.toString();
-      // Strip the "Exception: " prefix if present.
-      if (str.startsWith('Exception: ')) return str.substring(11);
-      return str;
-    }
-    return e.toString();
-  }
-
-  /// Returns the display heading for an engine group.
-  String _engineHeading(AIEngine engine) {
-    switch (engine) {
-      case AIEngine.gguf:
-        return 'GGUF Models (Customizable)';
-      case AIEngine.litert:
-        return 'LiteRT Models (On-device Optimized)';
+          backgroundColor: ClayColors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
@@ -428,49 +664,126 @@ class ModelSelectorScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildTabButton(
-    WidgetRef ref,
-    ModelFamilyTab tab,
-    String label,
-    ModelFamilyTab selectedTab,
+  /// Checks whether a utility model file is present on disk.
+  bool _isUtilityModelAvailable(
+    ModelInfo model,
+    UtilityModelState utilityState,
   ) {
-    final isActive = selectedTab == tab;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () => ref.read(_modelTabProvider.notifier).state = tab,
-        child: isActive
-            ? ClayContainer(
-                borderRadius: 12,
-                depth: 4.0,
-                baseColor: ClayColors.goldHighlight,
-                highlightColor: Colors.white,
-                shadowColor: ClayColors.goldShadow,
-                padding: const EdgeInsets.symmetric(vertical: 10),
+    if (model.id == 'functiongemma-270m') {
+      return utilityState.isFunctionGemmaAvailable;
+    } else if (model.id == 'embeddinggemma-300m') {
+      return utilityState.isEmbeddingGemmaAvailable;
+    }
+    return false;
+  }
+}
+
+/// Header for one device-tier section. Shows which brands are covered in the
+/// tier and whether the current phone can actually run it.
+class _TierSectionHeader extends StatelessWidget {
+  final DeviceTier tier;
+  final int deviceRamMB;
+
+  const _TierSectionHeader({required this.tier, required this.deviceRamMB});
+
+  @override
+  Widget build(BuildContext context) {
+    final models = getModelsByDeviceTier(
+      tier,
+    ).where((m) => m.category == ModelCategory.chat).toList();
+    if (models.isEmpty) return const SizedBox.shrink();
+
+    final brands = <ModelBrand>[];
+    for (final model in models) {
+      if (!brands.contains(model.brand)) brands.add(model.brand);
+    }
+    final minRam = models
+        .map((m) => m.minRamMB)
+        .reduce((a, b) => a < b ? a : b);
+    final fits = deviceRamMB == 0 || deviceRamMB >= minRam;
+
+    final (IconData icon, String blurb) = switch (tier) {
+      DeviceTier.lowEnd => (
+        Icons.battery_saver_rounded,
+        'Fastest replies, smallest downloads. Best for commands and short answers.',
+      ),
+      DeviceTier.midRange => (
+        Icons.smartphone_rounded,
+        'Balanced quality and speed. Recommended for everyday use.',
+      ),
+      DeviceTier.highEnd => (
+        Icons.rocket_launch_rounded,
+        'Highest answer quality. Slower replies and large downloads.',
+      ),
+    };
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                icon,
+                size: 18,
+                color: fits ? ClayColors.goldAccent : ClayColors.textHint,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
                 child: Text(
-                  label,
+                  tier.displayName.toUpperCase(),
                   style: GoogleFonts.outfit(
-                    color: ClayColors.goldAccent,
-                    fontSize: 12,
+                    color: fits ? ClayColors.textDark : ClayColors.textHint,
+                    fontSize: 14,
                     fontWeight: FontWeight.bold,
+                    letterSpacing: 0.4,
                   ),
-                  textAlign: TextAlign.center,
-                ),
-              )
-            : Container(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                decoration: const BoxDecoration(
-                  color: Colors.transparent,
-                ),
-                child: Text(
-                  label,
-                  style: GoogleFonts.outfit(
-                    color: ClayColors.textMuted,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  textAlign: TextAlign.center,
                 ),
               ),
+              if (!fits)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: ClayColors.redAccent.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: ClayColors.redAccent.withValues(alpha: 0.35),
+                    ),
+                  ),
+                  child: Text(
+                    'Needs more RAM',
+                    style: GoogleFonts.outfit(
+                      color: ClayColors.redAccent,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            blurb,
+            style: GoogleFonts.outfit(
+              color: ClayColors.textMuted,
+              fontSize: 12,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            brands.map((b) => b.displayName).join('  •  '),
+            style: GoogleFonts.outfit(
+              color: ClayColors.textHint,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -511,7 +824,9 @@ class _GroupedModelCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final opacity = supported ? 1.0 : 0.5;
     final baseColor = isActive ? ClayColors.goldHighlight : ClayColors.warmGrey;
-    final highlightColor = isActive ? const Color(0xFFFFFFFF) : ClayColors.highlight;
+    final highlightColor = isActive
+        ? const Color(0xFFFFFFFF)
+        : ClayColors.highlight;
     final shadowColor = isActive ? ClayColors.goldShadow : ClayColors.shadow;
     final border = isActive
         ? Border.all(color: ClayColors.goldAccent, width: 2.0)
@@ -542,18 +857,38 @@ class _GroupedModelCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: Text(
-                      model.name,
-                      style: GoogleFonts.outfit(
-                        color: ClayColors.textDark,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          model.name,
+                          style: GoogleFonts.outfit(
+                            color: ClayColors.textDark,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          model.isRecommendedPick
+                              ? '${model.brand.displayName} • Recommended pick'
+                              : '${model.brand.displayName} • Community build',
+                          style: GoogleFonts.outfit(
+                            color: model.isRecommendedPick
+                                ? ClayColors.greenAccent
+                                : ClayColors.textHint,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   if (isActive)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: ClayColors.goldAccent.withOpacity(0.12),
                         borderRadius: BorderRadius.circular(10),
@@ -583,9 +918,7 @@ class _GroupedModelCard extends StatelessWidget {
                   child: Wrap(
                     spacing: 8,
                     runSpacing: 6,
-                    children: [
-                      for (final badge in badges) _buildBadge(badge),
-                    ],
+                    children: [for (final badge in badges) _buildBadge(badge)],
                   ),
                 ),
 
@@ -605,7 +938,10 @@ class _GroupedModelCard extends StatelessWidget {
                 spacing: 16,
                 runSpacing: 8,
                 children: [
-                  _buildSpec(Icons.storage_rounded, '${model.sizeMB.toStringAsFixed(0)} MB'),
+                  _buildSpec(
+                    Icons.storage_rounded,
+                    '${model.sizeMB.toStringAsFixed(0)} MB',
+                  ),
                   _buildSpec(Icons.memory_rounded, '${model.minRamMB} MB RAM'),
                   _buildSpec(Icons.speed_rounded, model.speed),
                 ],
@@ -615,16 +951,24 @@ class _GroupedModelCard extends StatelessWidget {
               if (!supported) ...[
                 const SizedBox(height: 12),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: ClayColors.orangeAccent.withOpacity(0.08),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: ClayColors.orangeAccent.withOpacity(0.3)),
+                    border: Border.all(
+                      color: ClayColors.orangeAccent.withOpacity(0.3),
+                    ),
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.warning_amber_rounded,
-                          color: ClayColors.orangeAccent, size: 16),
+                      const Icon(
+                        Icons.warning_amber_rounded,
+                        color: ClayColors.orangeAccent,
+                        size: 16,
+                      ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -645,16 +989,24 @@ class _GroupedModelCard extends StatelessWidget {
               if (error != null) ...[
                 const SizedBox(height: 12),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: ClayColors.redAccent.withOpacity(0.08),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: ClayColors.redAccent.withOpacity(0.3)),
+                    border: Border.all(
+                      color: ClayColors.redAccent.withOpacity(0.3),
+                    ),
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.error_outline_rounded,
-                          color: ClayColors.redAccent, size: 16),
+                      const Icon(
+                        Icons.error_outline_rounded,
+                        color: ClayColors.redAccent,
+                        size: 16,
+                      ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -721,9 +1073,16 @@ class _GroupedModelCard extends StatelessWidget {
                           child: const Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.download_rounded, size: 18, color: ClayColors.goldAccent),
+                              Icon(
+                                Icons.download_rounded,
+                                size: 18,
+                                color: ClayColors.goldAccent,
+                              ),
                               SizedBox(width: 8),
-                              Text('Download', style: TextStyle(color: ClayColors.goldAccent)),
+                              Text(
+                                'Download',
+                                style: TextStyle(color: ClayColors.goldAccent),
+                              ),
                             ],
                           ),
                         ),
@@ -740,9 +1099,16 @@ class _GroupedModelCard extends StatelessWidget {
                           child: const Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.check_circle_rounded, size: 18, color: ClayColors.goldAccent),
+                              Icon(
+                                Icons.check_circle_rounded,
+                                size: 18,
+                                color: ClayColors.goldAccent,
+                              ),
                               SizedBox(width: 8),
-                              Text('Select', style: TextStyle(color: ClayColors.goldAccent)),
+                              Text(
+                                'Select',
+                                style: TextStyle(color: ClayColors.goldAccent),
+                              ),
                             ],
                           ),
                         ),
@@ -754,13 +1120,23 @@ class _GroupedModelCard extends StatelessWidget {
                         highlightColor: ClayColors.highlight,
                         shadowColor: ClayColors.shadow,
                         borderRadius: 14,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
                         child: const Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(Icons.delete_outline_rounded, size: 18, color: ClayColors.redAccent),
+                            Icon(
+                              Icons.delete_outline_rounded,
+                              size: 18,
+                              color: ClayColors.redAccent,
+                            ),
                             SizedBox(width: 6),
-                            Text('Delete', style: TextStyle(color: ClayColors.redAccent)),
+                            Text(
+                              'Delete',
+                              style: TextStyle(color: ClayColors.redAccent),
+                            ),
                           ],
                         ),
                       ),
@@ -801,9 +1177,7 @@ class _GroupedModelCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: badgeColor.withOpacity(0.1),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: badgeColor.withOpacity(0.3),
-        ),
+        border: Border.all(color: badgeColor.withOpacity(0.3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -831,13 +1205,9 @@ class _GroupedModelCard extends StatelessWidget {
         const SizedBox(width: 4),
         Text(
           text,
-          style: GoogleFonts.outfit(
-            color: ClayColors.textMuted,
-            fontSize: 12,
-          ),
+          style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 12),
         ),
       ],
     );
   }
 }
-

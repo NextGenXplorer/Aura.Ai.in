@@ -44,5 +44,10 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-# Log/text files in project root
+# Log/text/report/html files
 *.txt
+*.html
+*.docx
+*.pdf
+*.pptx
+

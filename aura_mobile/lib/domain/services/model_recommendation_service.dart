@@ -2,39 +2,52 @@ import 'package:aura_mobile/core/services/device_service.dart';
 import 'package:aura_mobile/domain/entities/model_info.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-final modelRecommendationServiceProvider = Provider((ref) => ModelRecommendationService());
+final modelRecommendationServiceProvider = Provider(
+  (ref) => ModelRecommendationService(),
+);
 
 class ModelRecommendationService {
-  
   List<ModelInfo> getRecommendations(DeviceInfo device) {
     // aggressive recommendation tailored for low-end devices
     // device.totalRamMB is usually reliable for categorization.
-    
+
     // 4GB RAM Devices (Usually show ~3500-3800 available effectively)
     // We want to show models that are < 3GB in size/RAM usage.
-    
+
     int safeMaxRamUsage;
-    
+
     if (device.totalRamMB <= 4096) {
-       // 4GB Device -> Allow up to ~3GB models (risky but allows Phi-2/DeepSeek)
-       safeMaxRamUsage = 3500; 
+      // 4GB Device -> Allow up to ~3GB models (risky but allows Phi-2/DeepSeek)
+      safeMaxRamUsage = 3500;
     } else if (device.totalRamMB <= 6144) {
-       // 6GB Device -> Allow up to ~4.5GB
-       safeMaxRamUsage = 5000;
+      // 6GB Device -> Allow up to ~4.5GB
+      safeMaxRamUsage = 5000;
     } else if (device.totalRamMB <= 8192) {
-       // 8GB Device -> Allow up to ~6.5GB
-       safeMaxRamUsage = 7000;
+      // 8GB Device -> Allow up to ~6.5GB
+      safeMaxRamUsage = 7000;
     } else {
-       // 12GB+ -> Unlimited
-       safeMaxRamUsage = 24000;
+      // 12GB+ -> Unlimited
+      safeMaxRamUsage = 24000;
     }
 
-    return modelCatalog.where((m) {
-        // ALWAYS include Qwen 2.5 0.5B & 1.5B as base options
-        if (m.id == 'qwen2.5-0.5b' || m.id == 'qwen2.5-1.5b') return true;
-        
-        // For others, check minRamMB against our "Safe Max"
-        return m.minRamMB <= safeMaxRamUsage;
+    final recommendations = modelCatalog.where((m) {
+      // Curated low-end picks always stay available as a safe baseline.
+      if (m.deviceTier == DeviceTier.lowEnd && m.isRecommendedPick) {
+        return true;
+      }
+
+      // Hide community variants from onboarding; they are opt-in choices
+      // available later in Model Manager.
+      if (!m.isRecommendedPick) return false;
+
+      // For others, check minRamMB against our "Safe Max"
+      return m.minRamMB <= safeMaxRamUsage;
     }).toList();
+
+    // Show the most capable supported model first, low-end fallbacks last.
+    recommendations.sort(
+      (a, b) => b.deviceTier.index.compareTo(a.deviceTier.index),
+    );
+    return recommendations;
   }
 }

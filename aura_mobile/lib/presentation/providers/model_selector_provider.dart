@@ -1,11 +1,15 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:aura_mobile/domain/entities/model_info.dart';
+import 'package:aura_mobile/domain/entities/online_model.dart';
 import 'package:aura_mobile/data/datasources/model_manager.dart';
 import 'package:aura_mobile/core/providers/ai_providers.dart';
-import 'package:aura_mobile/ai/run_anywhere_service.dart';
+import 'package:aura_mobile/core/services/download_service.dart';
+import 'package:aura_mobile/core/services/device_service.dart';
+import 'package:aura_mobile/core/services/llm_selection_store.dart';
 import 'package:aura_mobile/core/errors/app_exceptions.dart';
 import 'package:aura_mobile/core/services/error_handler_service.dart';
+import 'package:aura_mobile/presentation/providers/context_window_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // Model Manager Provider
@@ -68,6 +72,7 @@ class ModelSelectorState {
     List<ModelInfo>? availableModels,
     Set<String>? downloadedModelIds,
     String? activeModelId,
+    bool clearActiveModelId = false,
     Map<String, double>? downloadProgress,
     Map<String, String?>? downloadErrors,
     int? totalStorageUsed,
@@ -75,7 +80,9 @@ class ModelSelectorState {
     return ModelSelectorState(
       availableModels: availableModels ?? this.availableModels,
       downloadedModelIds: downloadedModelIds ?? this.downloadedModelIds,
-      activeModelId: activeModelId ?? this.activeModelId,
+      activeModelId: clearActiveModelId
+          ? null
+          : activeModelId ?? this.activeModelId,
       downloadProgress: downloadProgress ?? this.downloadProgress,
       downloadErrors: downloadErrors ?? this.downloadErrors,
       totalStorageUsed: totalStorageUsed ?? this.totalStorageUsed,
@@ -93,7 +100,7 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
   final Map<String, int> _downloadRetryCount = {};
 
   ModelSelectorNotifier(this._ref)
-      : super(ModelSelectorState(availableModels: modelCatalog)) {
+    : super(ModelSelectorState(availableModels: modelCatalog)) {
     _loadState();
     _listenToDownloads();
   }
@@ -120,15 +127,17 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
   }
 
   void _listenToDownloads() {
-    final runAnywhere = _ref.read(runAnywhereProvider);
-    _downloadSubscription = runAnywhere.downloadUpdates.listen((update) {
+    final downloadService = _ref.read(downloadServiceProvider);
+    _downloadSubscription = downloadService.downloadUpdates.listen((update) {
       String? modelId = _taskIdToModelId[update.id];
 
-      // Recovery logic: If the taskId (URL) isn't in our map, 
+      // Recovery logic: If the taskId (URL) isn't in our map,
       // look it up in the available models. This happens on app restart.
       if (modelId == null) {
         try {
-          final model = state.availableModels.firstWhere((m) => m.url == update.id);
+          final model = state.availableModels.firstWhere(
+            (m) => m.url == update.id,
+          );
           modelId = model.id;
           _taskIdToModelId[update.id] = modelId;
         } catch (_) {
@@ -175,7 +184,8 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
           );
 
           final newErrors = Map<String, String?>.from(state.downloadErrors);
-          newErrors[modelId] = 'Download failed. Retrying (attempt ${attempts + 1}/3)...';
+          newErrors[modelId] =
+              'Download failed. Retrying (attempt ${attempts + 1}/3)...';
           state = state.copyWith(downloadErrors: newErrors);
 
           // Retry after delay (don't await to avoid blocking the stream)
@@ -197,11 +207,9 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
 
   Future<void> _loadState() async {
     final modelManager = _ref.read(modelManagerProvider);
-    final runAnywhere = _ref.read(runAnywhereProvider);
-    final prefs = await SharedPreferences.getInstance();
+    final downloadService = _ref.read(downloadServiceProvider);
 
-    // Ensure RunAnywhere is initialized so we can check tasks
-    await runAnywhere.initialize();
+    await downloadService.initialize();
 
     final downloadedIds = <String>{};
     final downloadProgress = <String, double>{};
@@ -210,68 +218,45 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
     for (final model in modelCatalog) {
       if (await modelManager.isModelDownloaded(model.id)) {
         downloadedIds.add(model.id);
-        // A confirmed-downloaded model must not carry a stale error from a
-        // prior failed attempt.
-        downloadErrors.remove(model.id);
       } else {
         await modelManager.verifyAndCleanupModel(model.id);
       }
     }
 
-    String? activeModelIdCandidate = prefs.getString('active_model_id');
-    if (activeModelIdCandidate == null) {
-      final path = prefs.getString('selected_model_path');
-      if (path != null) {
-        try {
-          final model = modelCatalog.firstWhere((m) => path.contains(m.fileName) || path.contains(m.id), orElse: () => modelCatalog.first);
-          for (final mId in downloadedIds) {
-            final mPath = await modelManager.getModelPath(mId);
-            if (mPath == path) {
-              activeModelIdCandidate = mId;
-              break;
-            }
-          }
-          if (activeModelIdCandidate == null && path.contains(model.fileName)) {
-            activeModelIdCandidate = model.id;
-          }
-        } catch (e) {
-          _errorHandler.logWarning("Error mapping path to ID: $e");
-        }
-      }
-    }
-
-    if (activeModelIdCandidate != null && !downloadedIds.contains(activeModelIdCandidate)) {
-      activeModelIdCandidate = null;
-      await prefs.remove('active_model_id');
-    }
-
     final totalStorage = await modelManager.getTotalStorageUsed();
-
     state = state.copyWith(
       downloadedModelIds: downloadedIds,
-      activeModelId: null,
+      clearActiveModelId: true,
       downloadProgress: downloadProgress,
-      downloadErrors: downloadErrors, 
+      downloadErrors: downloadErrors,
       totalStorageUsed: totalStorage,
     );
 
-    if (activeModelIdCandidate != null) {
-      try {
-        final modelPath = await modelManager.getModelPath(activeModelIdCandidate);
-        final llmService = _ref.read(llmServiceProvider);
-        await llmService.loadModel(modelPath);
-        state = state.copyWith(activeModelId: activeModelIdCandidate);
-      } on ModelException catch (e) {
-        _errorHandler.handleError(e);
+    final router = _ref.read(llmRouterProvider);
+    try {
+      if (!router.isModelLoaded) await router.restoreActiveSelection();
+      var activeModelId = router.activeModelId;
+      if (activeModelId != null &&
+          !router.isOnline &&
+          !downloadedIds.contains(activeModelId)) {
+        await router.removeLocalSelection(activeModelId);
+        activeModelId = null;
+      }
+      state = state.copyWith(
+        activeModelId: activeModelId,
+        clearActiveModelId: activeModelId == null,
+      );
+    } on ModelException catch (error) {
+      _errorHandler.handleError(error);
+      final activeModelId = router.activeModelId;
+      if (activeModelId != null) {
         final newErrors = Map<String, String?>.from(state.downloadErrors);
-        newErrors[activeModelIdCandidate] = e.userMessage;
-        state = state.copyWith(downloadErrors: newErrors);
-      } catch (e) {
-        _errorHandler.logWarning('Failed to load active model: $e');
-        final newErrors = Map<String, String?>.from(state.downloadErrors);
-        newErrors[activeModelIdCandidate] = "Failed to load model";
+        newErrors[activeModelId] = error.userMessage;
         state = state.copyWith(downloadErrors: newErrors);
       }
+    } catch (error) {
+      _errorHandler.logWarning('Failed to restore active model: $error');
+      state = state.copyWith(clearActiveModelId: true);
     }
   }
 
@@ -296,7 +281,7 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
   Future<void> _attemptDownload(String modelId) async {
     final model = modelCatalog.firstWhere((m) => m.id == modelId);
     final modelManager = _ref.read(modelManagerProvider);
-    final runAnywhere = _ref.read(runAnywhereProvider);
+    final downloadService = _ref.read(downloadServiceProvider);
 
     // Clear previous errors
     final newErrors = Map<String, String?>.from(state.downloadErrors);
@@ -310,7 +295,7 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
       // 2. Start download — destination path is derived from the catalog file
       //    name via getModelPath (Req 7.1).
       final modelPath = await modelManager.getModelPath(modelId);
-      final taskId = await runAnywhere.downloadModel(model.url, modelPath);
+      final taskId = await downloadService.downloadModel(model.url, modelPath);
 
       if (taskId != null) {
         _taskIdToModelId[taskId] = modelId;
@@ -400,43 +385,63 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
 
   Future<void> deleteModel(String modelId) async {
     final modelManager = _ref.read(modelManagerProvider);
+    final router = _ref.read(llmRouterProvider);
+    LLMSelectionSnapshot? removedSelection;
     try {
+      removedSelection = await router.removeLocalSelection(modelId);
       await modelManager.deleteModel(modelId);
-      final newDownloaded = Set<String>.from(state.downloadedModelIds);
-      newDownloaded.remove(modelId);
+      final newDownloaded = Set<String>.from(state.downloadedModelIds)
+        ..remove(modelId);
       final totalStorage = await modelManager.getTotalStorageUsed();
-      String? newActiveModelId = state.activeModelId;
-      if (state.activeModelId == modelId) {
-        newActiveModelId = null;
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.remove('active_model_id');
-      }
+      final clearActive = state.activeModelId == modelId;
       state = state.copyWith(
         downloadedModelIds: newDownloaded,
-        activeModelId: newActiveModelId,
+        clearActiveModelId: clearActive,
         totalStorageUsed: totalStorage,
       );
     } on ModelException catch (e) {
+      if (removedSelection != null) {
+        try {
+          await router.restoreSelectionSnapshot(removedSelection);
+        } catch (restoreError) {
+          _errorHandler.logWarning(
+            'Could not restore selection after delete failure: $restoreError',
+          );
+        }
+      }
       _errorHandler.handleError(e);
     } catch (e) {
+      if (removedSelection != null) {
+        try {
+          await router.restoreSelectionSnapshot(removedSelection);
+        } catch (restoreError) {
+          _errorHandler.logWarning(
+            'Could not restore selection after delete failure: $restoreError',
+          );
+        }
+      }
       _errorHandler.logWarning('Error deleting model: $e');
     }
   }
 
   Future<void> selectModel(String modelId) async {
     if (!state.isDownloaded(modelId)) return;
+    final previousActiveModelId = state.activeModelId;
 
     // Clear any stale error for this model and clear the active model to
     // trigger the "Loading..." state in the UI. A fresh select attempt should
     // never show an error left over from a previous attempt.
     final clearedErrors = Map<String, String?>.from(state.downloadErrors);
     clearedErrors.remove(modelId);
-    state = state.copyWith(activeModelId: null, downloadErrors: clearedErrors);
+    state = state.copyWith(
+      clearActiveModelId: true,
+      downloadErrors: clearedErrors,
+    );
 
     SharedPreferences? prefs;
     try {
       final modelManager = _ref.read(modelManagerProvider);
-      final llmService = _ref.read(llmServiceProvider);
+      final router = _ref.read(llmRouterProvider);
 
       // Reconcile: make sure the file is actually present and valid before
       // attempting a load. If it isn't, fix the downloaded state instead of
@@ -449,28 +454,39 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
         newErrors[modelId] = 'Model file is missing. Please download again.';
         state = state.copyWith(
           downloadedModelIds: newDownloaded,
+          activeModelId: previousActiveModelId,
+          clearActiveModelId: previousActiveModelId == null,
           downloadErrors: newErrors,
         );
         await _updateStorageUsed();
         return;
       }
 
+      final selectedModel = modelManager.getModelById(modelId);
+      if (selectedModel == null) {
+        throw StateError('Unknown local model: $modelId');
+      }
       final modelPath = await modelManager.getModelPath(modelId);
-      
+
       // Set sentinel before loading
       prefs = await SharedPreferences.getInstance();
       await prefs.setBool('model_load_crashed_sentinel', true);
 
-      await llmService.loadModel(modelPath);
+      await router.selectLocalModel(
+        model: selectedModel,
+        path: modelPath,
+        deviceService: _ref.read(deviceServiceProvider),
+      );
 
       // Clear sentinel on success
       await prefs.setBool('model_load_crashed_sentinel', false);
 
-      await prefs.setString('active_model_id', modelId);
-      await prefs.setString('selected_model_path', modelPath);
       state = state.copyWith(activeModelId: modelId);
+      _syncContextWindow();
 
-      _errorHandler.logInfo('Successfully loaded model: ${modelManager.getModelById(modelId)?.name}');
+      _errorHandler.logInfo(
+        'Successfully loaded model: ${modelManager.getModelById(modelId)?.name}',
+      );
     } on ModelException catch (e) {
       if (prefs != null) {
         await prefs.setBool('model_load_crashed_sentinel', false);
@@ -479,7 +495,11 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
       // Show error in UI
       final newErrors = Map<String, String?>.from(state.downloadErrors);
       newErrors[modelId] = e.userMessage;
-      state = state.copyWith(downloadErrors: newErrors);
+      state = state.copyWith(
+        activeModelId: previousActiveModelId,
+        clearActiveModelId: previousActiveModelId == null,
+        downloadErrors: newErrors,
+      );
     } catch (e) {
       if (prefs != null) {
         await prefs.setBool('model_load_crashed_sentinel', false);
@@ -487,8 +507,34 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
       _errorHandler.logWarning('Error selecting model: $e');
       final newErrors = Map<String, String?>.from(state.downloadErrors);
       newErrors[modelId] = 'Failed to load model';
-      state = state.copyWith(downloadErrors: newErrors);
+      state = state.copyWith(
+        activeModelId: previousActiveModelId,
+        clearActiveModelId: previousActiveModelId == null,
+        downloadErrors: newErrors,
+      );
     }
+  }
+
+  Future<void> activateOnlineModel(OnlineModel model) async {
+    await _ref.read(llmRouterProvider).selectOnlineModel(model);
+    await _loadState();
+    _syncContextWindow();
+  }
+
+  /// Switches back to the already-configured online model without refetching
+  /// the provider catalog.
+  Future<void> activateSavedOnlineModel() async {
+    await _ref.read(llmRouterProvider).activateSavedOnlineSelection();
+    await _loadState();
+    _syncContextWindow();
+  }
+
+  /// Pushes the newly active model's tier and context window into the chat
+  /// context indicator. Without this, switching models left the indicator on
+  /// the previous model's limits.
+  void _syncContextWindow() {
+    final router = _ref.read(llmRouterProvider);
+    _ref.read(contextWindowProvider.notifier).updateModelTier(router.modelTier);
   }
 
   Future<void> refreshModels() async {
@@ -496,9 +542,8 @@ class ModelSelectorNotifier extends StateNotifier<ModelSelectorState> {
   }
 }
 
-
 // Provider
 final modelSelectorProvider =
     StateNotifierProvider<ModelSelectorNotifier, ModelSelectorState>((ref) {
-  return ModelSelectorNotifier(ref);
-});
+      return ModelSelectorNotifier(ref);
+    });

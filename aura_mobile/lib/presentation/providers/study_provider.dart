@@ -4,6 +4,8 @@ import 'package:aura_mobile/domain/entities/flashcard.dart';
 import 'package:aura_mobile/domain/entities/quiz.dart';
 import 'package:aura_mobile/domain/entities/exam_schedule.dart';
 import 'package:aura_mobile/domain/services/study_service.dart';
+import 'package:aura_mobile/features/daily_briefing/home_widget_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 final studyProvider = StateNotifierProvider<StudyNotifier, StudyState>((ref) {
   return StudyNotifier(ref.read(studyServiceProvider));
@@ -86,17 +88,60 @@ class StudyNotifier extends StateNotifier<StudyState> {
     try {
       final decks = await _studyService.getAllDecks();
       final exams = await _studyService.getUpcomingExams();
-      state = state.copyWith(decks: decks, upcomingExams: exams, isLoading: false);
+      state = state.copyWith(
+        decks: decks,
+        upcomingExams: exams,
+        isLoading: false,
+      );
+      _syncHomeWidget();
     } catch (e) {
       state = state.copyWith(isLoading: false, error: e.toString());
     }
+  }
+
+  /// Pushes the current study numbers to the home screen widget.
+  ///
+  /// Fire-and-forget: the widget is a nicety and must never delay or fail a
+  /// study action.
+  void _syncHomeWidget() {
+    Future(() async {
+      try {
+        final decks = state.decks;
+
+        // Due counts are stored per deck, so the dashboard total is a sum. Deck
+        // counts are small, and this runs off the UI path.
+        var due = 0;
+        for (final deck in decks) {
+          due += (await _studyService.getDueCards(deck.id)).length;
+        }
+
+        final prefs = await SharedPreferences.getInstance();
+        final streak = prefs.getInt('proactive_study_streak') ?? 0;
+
+        final exams = state.upcomingExams;
+        final nextExam = exams.isEmpty ? null : exams.first;
+
+        await HomeWidgetService.updateStudyData(
+          dueCards: due,
+          streakDays: streak,
+          deckCount: decks.length,
+          nextExamName: nextExam?.name,
+          nextExamDays: nextExam?.daysRemaining,
+        );
+      } catch (e) {
+        debugPrint('STUDY: widget sync failed: $e');
+      }
+    });
   }
 
   /// Create a deck from document text
   Future<FlashcardDeck?> createDeckFromText(String text, {String? name}) async {
     state = state.copyWith(isLoading: true, error: null);
     try {
-      final deck = await _studyService.createDeckFromDocumentText(text, name: name);
+      final deck = await _studyService.createDeckFromDocumentText(
+        text,
+        name: name,
+      );
       await loadDashboard();
       return deck;
     } catch (e) {
@@ -106,9 +151,15 @@ class StudyNotifier extends StateNotifier<StudyState> {
   }
 
   /// Create an empty deck
-  Future<FlashcardDeck?> createEmptyDeck(String name, {String? description}) async {
+  Future<FlashcardDeck?> createEmptyDeck(
+    String name, {
+    String? description,
+  }) async {
     try {
-      final deck = await _studyService.createEmptyDeck(name, description: description);
+      final deck = await _studyService.createEmptyDeck(
+        name,
+        description: description,
+      );
       await loadDashboard();
       return deck;
     } catch (e) {
@@ -139,7 +190,12 @@ class StudyNotifier extends StateNotifier<StudyState> {
   Future<void> addCard(String front, String back, {String? topic}) async {
     if (state.activeDeck == null) return;
     try {
-      await _studyService.addCard(state.activeDeck!.id, front, back, topic: topic);
+      await _studyService.addCard(
+        state.activeDeck!.id,
+        front,
+        back,
+        topic: topic,
+      );
       await selectDeck(state.activeDeck!);
     } catch (e) {
       state = state.copyWith(error: e.toString());
@@ -161,8 +217,11 @@ class StudyNotifier extends StateNotifier<StudyState> {
     try {
       await _studyService.reviewCard(cardId, rating);
       // Remove from review queue
-      final updatedQueue = state.reviewQueue.where((c) => c.id != cardId).toList();
+      final updatedQueue = state.reviewQueue
+          .where((c) => c.id != cardId)
+          .toList();
       state = state.copyWith(reviewQueue: updatedQueue);
+      _syncHomeWidget();
     } catch (e) {
       debugPrint('STUDY: Review error: $e');
     }
@@ -181,7 +240,10 @@ class StudyNotifier extends StateNotifier<StudyState> {
         count: count,
       );
       if (questions.isEmpty) {
-        state = state.copyWith(isLoading: false, error: 'Not enough cards for a quiz');
+        state = state.copyWith(
+          isLoading: false,
+          error: 'Not enough cards for a quiz',
+        );
         return;
       }
       final session = await _studyService.createQuizSession(
@@ -203,12 +265,18 @@ class StudyNotifier extends StateNotifier<StudyState> {
   }
 
   /// Answer the current quiz question
-  Future<void> answerQuizQuestion(String answer, {required int timeTakenMs}) async {
-    if (state.activeQuiz == null || state.currentQuizIndex >= state.quizQuestions.length) return;
+  Future<void> answerQuizQuestion(
+    String answer, {
+    required int timeTakenMs,
+  }) async {
+    if (state.activeQuiz == null ||
+        state.currentQuizIndex >= state.quizQuestions.length)
+      return;
 
     final question = state.quizQuestions[state.currentQuizIndex];
     final isCorrect = question.type == 'multiple_choice'
-        ? answer.trim().toLowerCase() == question.correctAnswer.trim().toLowerCase()
+        ? answer.trim().toLowerCase() ==
+              question.correctAnswer.trim().toLowerCase()
         : _fuzzyMatch(answer, question.correctAnswer);
 
     if (question.flashcard != null) {
@@ -279,8 +347,32 @@ class StudyNotifier extends StateNotifier<StudyState> {
     if (userLower.contains(correctLower)) return true;
 
     // 3. Keyword matching — extract meaningful words (3+ chars, not stopwords)
-    final stopWords = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'of', 'in', 'to', 'for',
-      'and', 'or', 'but', 'that', 'this', 'with', 'from', 'by', 'on', 'at', 'it', 'its', 'as'};
+    final stopWords = {
+      'the',
+      'a',
+      'an',
+      'is',
+      'are',
+      'was',
+      'were',
+      'of',
+      'in',
+      'to',
+      'for',
+      'and',
+      'or',
+      'but',
+      'that',
+      'this',
+      'with',
+      'from',
+      'by',
+      'on',
+      'at',
+      'it',
+      'its',
+      'as',
+    };
 
     List<String> extractKeywords(String text) {
       return text
@@ -298,7 +390,9 @@ class StudyNotifier extends StateNotifier<StudyState> {
     // Count how many correct keywords appear in user's answer
     int matched = 0;
     for (final keyword in correctKeywords) {
-      if (userKeywords.any((uk) => uk == keyword || keyword.contains(uk) || uk.contains(keyword))) {
+      if (userKeywords.any(
+        (uk) => uk == keyword || keyword.contains(uk) || uk.contains(keyword),
+      )) {
         matched++;
       }
     }
@@ -309,7 +403,11 @@ class StudyNotifier extends StateNotifier<StudyState> {
 
   // ── Exam Methods ─────────────────────────────────────────────────────────
 
-  Future<void> scheduleExam(String name, DateTime date, {String? deckId}) async {
+  Future<void> scheduleExam(
+    String name,
+    DateTime date, {
+    String? deckId,
+  }) async {
     try {
       await _studyService.scheduleExam(name, date, deckId: deckId);
       await loadDashboard();

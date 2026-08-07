@@ -17,20 +17,29 @@ void main() {
     });
 
     test('Detects Memory Retrieve Intent (Priority 3)', () async {
+      // Only EXPLICIT memory phrasing triggers retrieval; generic questions
+      // deliberately fall through to the model.
       expect(await service.detectIntent('what did i say about milk'), IntentType.memoryRetrieve);
-      expect(await service.detectIntent('when is my meeting'), IntentType.memoryRetrieve);
-      expect(await service.detectIntent('what is my pet name'), IntentType.memoryRetrieve);
+      expect(await service.detectIntent('what do you know about me'), IntentType.memoryRetrieve);
+      expect(await service.detectIntent('recall my notes'), IntentType.memoryRetrieve);
+    });
+
+    test('Generic questions are NOT caught as memory retrieve', () async {
+      expect(await service.detectIntent('when is my meeting'), IntentType.normalChat);
+      expect(await service.detectIntent('what is my pet name'), IntentType.normalChat);
     });
 
     test('Detects Web Search Intent (Priority 4)', () async {
-      expect(await service.detectIntent('search for news'), IntentType.webSearch);
-      expect(await service.detectIntent('latest tech updates'), IntentType.webSearch);
-      expect(await service.detectIntent('who is the president'), IntentType.webSearch);
+      // Explicit search commands trigger web search; bare topic phrases do not.
+      expect(await service.detectIntent('search for flutter widgets'), IntentType.webSearch);
+      expect(await service.detectIntent('browse for cheap flights'), IntentType.webSearch);
+      expect(await service.detectIntent('lookup python errors'), IntentType.webSearch);
     });
 
     test('Defaults to Normal Chat if no trigger', () async {
       expect(await service.detectIntent('hello world'), IntentType.normalChat);
       expect(await service.detectIntent('how are you'), IntentType.normalChat);
+      expect(await service.detectIntent('latest tech updates'), IntentType.normalChat);
     });
 
     test('Extracts Memory Content Correctly', () {

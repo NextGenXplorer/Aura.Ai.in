@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:aura_mobile/domain/services/llm_intent_classifier.dart';
 import 'package:aura_mobile/data/datasources/llm_service.dart';
+import 'package:aura_mobile/data/datasources/function_gemma_service.dart';
+import 'package:aura_mobile/core/services/utility_model_manager.dart';
 import 'package:aura_mobile/core/providers/ai_providers.dart';
 
 enum IntentType {
@@ -64,11 +66,33 @@ enum IntentType {
   orderFood,
   shareContent,
   openProfile,
+
+  // 9. Document Generation
+  generateDocument,
+  generateCode,
+  generateCsv,
+  summarizeChat,
+
+  // 10. Connectors
+  getWeather,
+  getWikipedia,
+  getNews,
+  youtubeSearch,
+  translateText,
+  generateQRCode,
+  getSystemInfo,
+  findNearby,
 }
 
 final intentDetectionServiceProvider = Provider((ref) {
   final llmService = ref.watch(llmServiceProvider);
-  return IntentDetectionService(llmService: llmService);
+  final functionGemma = ref.watch(functionGemmaServiceProvider);
+  final utilityModelState = ref.watch(utilityModelManagerProvider);
+  return IntentDetectionService(
+    llmService: llmService,
+    functionGemmaService: functionGemma,
+    utilityModelState: utilityModelState,
+  );
 });
 
 /// ─────────────────────────────────────────────────────────────────────────────
@@ -93,9 +117,17 @@ final intentDetectionServiceProvider = Provider((ref) {
 /// ─────────────────────────────────────────────────────────────────────────────
 class IntentDetectionService {
   late final LLMIntentClassifier? _llmClassifier;
+  FunctionGemmaService? _functionGemmaService;
+  UtilityModelState? _utilityModelState;
 
-  IntentDetectionService({LLMService? llmService}) {
+  IntentDetectionService({
+    LLMService? llmService,
+    FunctionGemmaService? functionGemmaService,
+    UtilityModelState? utilityModelState,
+  }) {
     _llmClassifier = llmService != null ? LLMIntentClassifier(llmService) : null;
+    _functionGemmaService = functionGemmaService;
+    _utilityModelState = utilityModelState;
   }
 
   // ── Shared helpers ────────────────────────────────────────────────────────
@@ -118,6 +150,38 @@ class IntentDetectionService {
     final msg = message.trim();
     final lo  = msg.toLowerCase();
     final words = lo.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+
+    // ── Progressive Enhancement: FunctionGemma ──────────────────────────────
+    // When FunctionGemma is downloaded and available, try model-based intent
+    // classification FIRST. If it returns a valid function call, map it to an
+    // IntentType and return immediately. If it returns null (timeout, error, or
+    // no match), fall through silently to the existing regex engine below.
+    // Guard: skip for trivially short messages (≤2 words) to avoid wasting
+    // inference time on "hi", "hello", etc.
+    if (words.length > 2 &&
+        _utilityModelState != null &&
+        _utilityModelState!.isFunctionGemmaAvailable &&
+        _functionGemmaService != null) {
+      try {
+        final result = await _functionGemmaService!.classifyIntent(message);
+        if (result != null) {
+          final functionName = result['name'] as String?;
+          if (functionName != null && functionToIntentMap.containsKey(functionName)) {
+            final intentName = functionToIntentMap[functionName]!;
+            final mapped = IntentType.values.cast<IntentType?>().firstWhere(
+              (e) => e!.name == intentName,
+              orElse: () => null,
+            );
+            if (mapped != null) {
+              debugPrint('INTENT_DETECTION: FunctionGemma classified → $mapped');
+              return mapped;
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('INTENT_DETECTION: FunctionGemma failed, falling through to regex: $e');
+      }
+    }
 
     // ── 0️⃣  Greeting / trivial message fast-path ──────────────────────────
     // Very short messages (≤ 2 words) that don't contain a special trigger
@@ -219,11 +283,16 @@ class IntentDetectionService {
     }
 
     // ── 3️⃣  Memory Retrieve ──────────────────────────────────────────────
+    // IMPORTANT: Only trigger on EXPLICIT memory phrasing. Generic questions
+    // like "what is oops" or "what is python" must NOT be caught here —
+    // they should go to the LLM/web search to be answered.
     if (RegExp(
       r'^(recall|retrieve|fetch\s+from\s+memory|find\s+in\s+memory|'
-      r'search\s+(my\s+)?memory|what\s+(was|did|is|do\s+you\s+know)|'
-      r'when\s+(was|is)|where\s+(was|is|did)|bring\s+up\s+(memory|what)|'
-      r'have\s+you\s+saved|what\s+did\s+you\s+remember)\b',
+      r'search\s+(my\s+)?memory|'
+      r'what\s+did\s+i\s+(say|tell|save|store|ask|mention)|'
+      r'what\s+do\s+you\s+(know|remember)\s+about\s+(me|my)|'
+      r'what\s+did\s+you\s+(save|store|remember)|'
+      r'have\s+you\s+saved|bring\s+up\s+(my\s+)?memor)',
       caseSensitive: false,
     ).hasMatch(lo) ||
         lo.contains('do you remember') ||
@@ -437,32 +506,36 @@ class IntentDetectionService {
     }
 
     // ── 1️⃣1️⃣  Web Search ─────────────────────────────────────────────────
-    // Explicit search commands
+    // ONLY explicit search commands go to web search. Knowledge questions like
+    // "what is oops", "explain recursion", "who is Newton" are NOT caught here —
+    // they go to normalChat so the LLM can answer them. The orchestrator then
+    // redirects to web search ONLY for small models (which can't answer well).
     if (RegExp(
-      r'^(search\s+(for\s+)?|find\s+|lookup\s+|look\s+up\s+|google\s+|'
-      r'browse\s+|research\s+|show\s+me\s+|get\s+me\s+info\s+on\s+|'
-      r'find\s+me\s+|i\s+want\s+to\s+know\s+(about\s+)?|'
-      r'tell\s+me\s+about\s+|explain\s+|define\s+|'
-      r'who\s+(is|was|are)\s+|what\s+(is|was|are|were|happened)\s+|'
-      r'when\s+(is|was|does|did)\s+|where\s+(is|can|do|did)\s+|'
-      r'how\s+(to|do|can|does|much|many)\s+)',
+      r'^(search\s+(for\s+)?|google\s+|look\s+up\s+|lookup\s+|'
+      r'browse\s+for\s+|search\s+the\s+web\s+for\s+|'
+      r'find\s+(me\s+)?(the\s+)?(latest|current|news|price|cost))',
       caseSensitive: false,
     ).hasMatch(lo) ||
         lo.startsWith('[search]')) {
       debugPrint('INTENT_DETECTION: Explicit search command → webSearch');
       return IntentType.webSearch;
     }
-    // Context keywords that imply real-time info needs
+    // Real-time info keywords — these genuinely need fresh web data.
+    // "today" alone is NOT here (it matched "today's lunch" etc.) — it must
+    // be paired with a real-time context word.
+    // NOTE: weather/temperature/forecast are intentionally EXCLUDED here so
+    // they reach the dedicated getWeather intent below, which uses the
+    // Open-Meteo API (free, no key) instead of opening a browser search.
     if (RegExp(
-      r'\b(latest|news|todays?|current|trending|live\s+(score|update)|'
-      r'weather|forecast|temperature|rain|humidity|'
-      r'price\s+of|cost\s+of|rate\s+of|stock\s+price|'
+      r'\b(latest\s+news|breaking\s+news|current\s+news|trending\s+now|'
+      r'live\s+(score|update|match)|'
+      r'price\s+of|cost\s+of|rate\s+of|stock\s+price|share\s+price|'
       r'cricket\s+score|football\s+result|match\s+result|'
-      r'box\s+office|movie\s+review|release\s+date|'
-      r'when\s+does|is\s+\w+\s+open)\b',
+      r'box\s+office|release\s+date\s+of|'
+      r'todays?\s+(news|headlines|score|match|price|rate))\b',
       caseSensitive: false,
     ).hasMatch(lo)) {
-      debugPrint('INTENT_DETECTION: Context keyword → webSearch');
+      debugPrint('INTENT_DETECTION: Real-time keyword → webSearch');
       return IntentType.webSearch;
     }
 
@@ -730,6 +803,126 @@ class IntentDetectionService {
     ).hasMatch(lo)) {
       debugPrint('INTENT_DETECTION: Study dashboard → studyOpenDashboard');
       return IntentType.studyOpenDashboard;
+    }
+
+    // ── 📄 Document Generation / Export to PDF ──────────────────────────────
+    // Catches many natural phrasings:
+    //   "generate a pdf about X", "create a document about Y"
+    //   "generate in pdf", "make it a pdf", "give me a pdf", "send as pdf"
+    //   "export to pdf", "convert to pdf", "download as pdf", "save as pdf"
+    //   "put this in a pdf", "in pdf format"
+    if (RegExp(
+      r'\b(generate|create|make|write|export|save|download|convert|give|send|put|export)\b'
+      r'.*\b(pdf|document)\b|'
+      r'\b(in|as|to)\s+(a\s+)?pdf\b|'
+      r'\bpdf\s+(format|file|version)\b|'
+      r'\b(write|create|generate|make)\s+(a\s+)?(report|essay|letter|resume|cv|document|notes)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Document generation → generateDocument');
+      return IntentType.generateDocument;
+    }
+
+    // "write python/javascript/dart code for X and save"
+    // "generate code for X", "create a script for Y"
+    if (RegExp(
+      r'\b(write|create|generate|make)\s+.*(code|script|program)\b.*\b(save|export|file|download)\b|'
+      r'\b(generate|export)\s+(a\s+)?(python|javascript|dart|java|html|css|sql|code)\s+(file|script)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Code generation → generateCode');
+      return IntentType.generateCode;
+    }
+
+    // "create a spreadsheet/csv about X", "generate csv data"
+    if (RegExp(
+      r'\b(create|generate|make|export)\s+(a\s+)?(csv|spreadsheet|excel|table\s+data)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: CSV generation → generateCsv');
+      return IntentType.generateCsv;
+    }
+
+    // "summarize this chat/conversation and save/export"
+    if (RegExp(
+      r'\b(summarize|summary)\s+(this\s+)?(chat|conversation|discussion)\b.*\b(save|export|pdf|download)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Summarize chat → summarizeChat');
+      return IntentType.summarizeChat;
+    }
+
+    // ── 🌤️ Weather ──────────────────────────────────────────────────────────
+    if (RegExp(
+      r'\b(weather|temperature|forecast|rain|sunny|cloudy|humid)\b.*\b(in|at|for|of)?\b',
+      caseSensitive: false,
+    ).hasMatch(lo) && !lo.contains('search')) {
+      debugPrint('INTENT_DETECTION: Weather query → getWeather');
+      return IntentType.getWeather;
+    }
+
+    // ── 📖 Wikipedia ────────────────────────────────────────────────────────
+    if (RegExp(
+      r'^(wiki|wikipedia)\s+|.*\b(wikipedia|wiki)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Wikipedia → getWikipedia');
+      return IntentType.getWikipedia;
+    }
+
+    // ── 📰 News ─────────────────────────────────────────────────────────────
+    if (RegExp(
+      r'^(news|headlines|latest\s+news)\b|\b(news|headlines)\s+(about|on|for)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: News → getNews');
+      return IntentType.getNews;
+    }
+
+    // ── 🎬 YouTube ──────────────────────────────────────────────────────────
+    if (RegExp(
+      r'\b(youtube|yt)\b.*\b(search|find|play|watch|show|look)\b|\b(search|find|play|watch)\b.*\b(youtube|yt)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: YouTube search → youtubeSearch');
+      return IntentType.youtubeSearch;
+    }
+
+    // ── 🌐 Translation ──────────────────────────────────────────────────────
+    if (RegExp(
+      r'^translate\b|\btranslat(e|ion)\b.*\b(to|into|in)\s+\w+',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Translation → translateText');
+      return IntentType.translateText;
+    }
+
+    // ── 📱 QR Code ──────────────────────────────────────────────────────────
+    if (RegExp(
+      r'\b(qr\s*code|generate\s+qr|create\s+qr|make\s+qr)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: QR Code → generateQRCode');
+      return IntentType.generateQRCode;
+    }
+
+    // ── 📱 System Info ──────────────────────────────────────────────────────
+    if (RegExp(
+      r'\b(battery|storage|device\s+info|system\s+info|phone\s+info|ram|memory\s+usage)\b',
+      caseSensitive: false,
+    ).hasMatch(lo) && RegExp(r'\b(check|show|what|how\s+much|status)\b', caseSensitive: false).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: System info → getSystemInfo');
+      return IntentType.getSystemInfo;
+    }
+
+    // ── 📍 Find Nearby ──────────────────────────────────────────────────────
+    if (RegExp(
+      r'\b(nearby|near\s+me|closest|nearest)\b.*\b(restaurant|hospital|atm|pharmacy|hotel|gas|petrol|cafe|gym|park|store|shop)\b|'
+      r'\b(find|show|where)\b.*\b(restaurant|hospital|atm|pharmacy|hotel)\b.*\b(near|nearby|closest)\b',
+      caseSensitive: false,
+    ).hasMatch(lo)) {
+      debugPrint('INTENT_DETECTION: Find nearby → findNearby');
+      return IntentType.findNearby;
     }
 
     // ── 1️⃣3️⃣  LLM Fallback (for ambiguous natural language) ──────────────

@@ -21,8 +21,9 @@ class NotificationService {
     tz.initializeTimeZones();
     tz.setLocalLocation(tz.getLocation('Asia/Kolkata')); // Set to user's timezone
 
-    // Android initialization settings
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    // Android initialization settings. The status-bar (small) icon must be a
+    // white silhouette — a full-colour launcher icon renders as a white blob.
+    const androidSettings = AndroidInitializationSettings('@drawable/ic_notification');
     
     const initSettings = InitializationSettings(
       android: androidSettings,
@@ -151,6 +152,8 @@ class NotificationService {
           channelDescription: 'Notifications for scheduled events and reminders',
           importance: Importance.high,
           priority: Priority.high,
+          icon: '@drawable/ic_notification',
+          largeIcon: DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
         ),
       ),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,

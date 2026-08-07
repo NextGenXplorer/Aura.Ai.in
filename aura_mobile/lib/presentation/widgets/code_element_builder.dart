@@ -13,19 +13,38 @@ final CodeExecutionService _executionService = CodeExecutionService();
 // ── Language helpers ──────────────────────────────────────────────────────────
 Color _langColor(String lang) {
   switch (lang) {
-    case 'python': return const Color(0xFF4B8BBE);
-    case 'javascript': case 'js': return const Color(0xFFF7DF1E);
-    case 'html': return const Color(0xFFE34C26);
-    case 'dart': return const Color(0xFF54C5F8);
-    case 'java': return const Color(0xFFF89820);
-    case 'kotlin': return const Color(0xFF7F52FF);
-    case 'cpp': case 'c': return const Color(0xFF659BD3);
-    case 'bash': case 'sh': return const Color(0xFF89E051);
-    case 'rust': return const Color(0xFFDEA584);
-    case 'go': return const Color(0xFF00ADD8);
-    case 'swift': return const Color(0xFFFA7343);
-    case 'typescript': case 'ts': return const Color(0xFF3178C6);
-    default: return const Color(0xFFBC4B2E); // Matches ClayColors.goldAccent terracotta
+    case 'python':
+      return const Color(0xFF4B8BBE);
+    case 'javascript':
+    case 'js':
+      return const Color(0xFFF7DF1E);
+    case 'html':
+      return const Color(0xFFE34C26);
+    case 'dart':
+      return const Color(0xFF54C5F8);
+    case 'java':
+      return const Color(0xFFF89820);
+    case 'kotlin':
+      return const Color(0xFF7F52FF);
+    case 'cpp':
+    case 'c':
+      return const Color(0xFF659BD3);
+    case 'bash':
+    case 'sh':
+      return const Color(0xFF89E051);
+    case 'rust':
+      return const Color(0xFFDEA584);
+    case 'go':
+      return const Color(0xFF00ADD8);
+    case 'swift':
+      return const Color(0xFFFA7343);
+    case 'typescript':
+    case 'ts':
+      return const Color(0xFF3178C6);
+    default:
+      return const Color(
+        0xFFBC4B2E,
+      ); // Matches ClayColors.goldAccent terracotta
   }
 }
 
@@ -49,17 +68,35 @@ class CodeElementBuilder extends MarkdownElementBuilder {
       language = className.substring(9).toLowerCase();
     }
 
+    // Inline code spans (`like this`) reach this builder too, because the
+    // markdown parser emits <code> for both fenced blocks and inline spans.
+    // Rendering a full code card for an inline span produced a card sitting in
+    // the middle of a sentence — and inside a table cell it overflowed the row.
+    // Inline spans fall through to the stylesheet's `code` text style instead.
+    final bool isBlock = className != null || textContent.contains('\n');
+    if (!isBlock) return null;
+
     const nonExecutable = [
-      'css', 'scss', 'sass', 'less', 'json', 'yaml', 'yml',
-      'md', 'markdown', 'sql', 'plaintext', ''
+      'css',
+      'scss',
+      'sass',
+      'less',
+      'json',
+      'yaml',
+      'yml',
+      'md',
+      'markdown',
+      'sql',
+      'plaintext',
+      '',
     ];
 
-    final screenWidth = MediaQuery.of(context).size.width - 8;
-    final widget = !nonExecutable.contains(language)
+    // Do NOT pin the card to the screen width: the bubble adds horizontal
+    // padding, so a screen-wide card overflowed by exactly that padding. Let
+    // the card take whatever width its parent offers.
+    return !nonExecutable.contains(language)
         ? _CodeBlockWithPreview(code: textContent, language: language)
         : _SimpleCodeBlock(code: textContent, language: language);
-
-    return SizedBox(width: screenWidth, child: widget);
   }
 }
 
@@ -119,13 +156,23 @@ class _CodeBlockWithPreviewState extends State<_CodeBlockWithPreview> {
   bool _copied = false;
 
   Future<void> _runCode() async {
-    setState(() { _isExecuting = true; _executionOutput = null; _hasError = false; });
-    final output = await _executionService.executeCode(widget.code, widget.language);
+    setState(() {
+      _isExecuting = true;
+      _executionOutput = null;
+      _hasError = false;
+    });
+    final output = await _executionService.executeCode(
+      widget.code,
+      widget.language,
+    );
     if (mounted) {
       final lower = output.toLowerCase();
       setState(() {
         _isExecuting = false;
-        _hasError = lower.contains('error') || lower.contains('exception') || lower.contains('traceback');
+        _hasError =
+            lower.contains('error') ||
+            lower.contains('exception') ||
+            lower.contains('traceback');
         _executionOutput = output;
       });
     }
@@ -173,14 +220,14 @@ class _CodeBlockWithPreviewState extends State<_CodeBlockWithPreview> {
         child: _tabIndex == 0
             ? _CodeBody(key: const ValueKey('code'), code: widget.code)
             : isHtml
-                ? _HtmlPreview(key: const ValueKey('html'), code: widget.code)
-                : _RunOutput(
-                    key: const ValueKey('run'),
-                    isExecuting: _isExecuting,
-                    output: _executionOutput,
-                    hasError: _hasError,
-                    langColor: langColor,
-                  ),
+            ? _HtmlPreview(key: const ValueKey('html'), code: widget.code)
+            : _RunOutput(
+                key: const ValueKey('run'),
+                isExecuting: _isExecuting,
+                output: _executionOutput,
+                hasError: _hasError,
+                langColor: langColor,
+              ),
       ),
     );
   }
@@ -222,7 +269,11 @@ class _CodeCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // Header
-            _CardHeader(language: language, langColor: langColor, actions: actions),
+            _CardHeader(
+              language: language,
+              langColor: langColor,
+              actions: actions,
+            ),
             // Inner content (sunken code body or HTML preview)
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
@@ -375,7 +426,7 @@ class _RunOutput extends StatelessWidget {
                   width: 14,
                   height: 14,
                   child: CircularProgressIndicator(
-                    strokeWidth: 2, 
+                    strokeWidth: 2,
                     color: langColor,
                   ),
                 ),
@@ -383,34 +434,40 @@ class _RunOutput extends StatelessWidget {
                 Text(
                   'Running...',
                   style: GoogleFonts.jetBrainsMono(
-                    fontSize: 12, 
+                    fontSize: 12,
                     color: Colors.white.withOpacity(0.4),
                   ),
                 ),
               ],
             )
           : output == null
-              ? Row(
-                  children: [
-                    Icon(Icons.chevron_right_rounded, color: Colors.white.withOpacity(0.2), size: 16),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Tap Run to execute',
-                      style: GoogleFonts.jetBrainsMono(
-                        fontSize: 12, 
-                        color: Colors.white.withOpacity(0.2),
-                      ),
-                    ),
-                  ],
-                )
-              : SelectableText(
-                  output!,
+          ? Row(
+              children: [
+                Icon(
+                  Icons.chevron_right_rounded,
+                  color: Colors.white.withOpacity(0.2),
+                  size: 16,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  'Tap Run to execute',
                   style: GoogleFonts.jetBrainsMono(
-                    fontSize: 12.5,
-                    height: 1.6,
-                    color: hasError ? const Color(0xFFFF8B8B) : const Color(0xFF90FF90),
+                    fontSize: 12,
+                    color: Colors.white.withOpacity(0.2),
                   ),
                 ),
+              ],
+            )
+          : SelectableText(
+              output!,
+              style: GoogleFonts.jetBrainsMono(
+                fontSize: 12.5,
+                height: 1.6,
+                color: hasError
+                    ? const Color(0xFFFF8B8B)
+                    : const Color(0xFF90FF90),
+              ),
+            ),
     );
   }
 }
@@ -426,9 +483,15 @@ class _CopyButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color buttonColor = copied ? ClayColors.greenAccent : ClayColors.textMuted;
-    final Color highlightColor = copied ? ClayColors.greenHighlight : const Color(0xFFFDFCF9);
-    final Color shadowColor = copied ? ClayColors.greenShadow : ClayColors.shadow;
+    final Color buttonColor = copied
+        ? ClayColors.greenAccent
+        : ClayColors.textMuted;
+    final Color highlightColor = copied
+        ? ClayColors.greenHighlight
+        : const Color(0xFFFDFCF9);
+    final Color shadowColor = copied
+        ? ClayColors.greenShadow
+        : ClayColors.shadow;
 
     return ClayButton(
       onTap: onTap,
@@ -479,15 +542,25 @@ class _RunButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final label = isShowingResult ? 'Code' : (isHtml ? 'Preview' : (isRunning ? 'Running' : 'Run'));
+    final label = isShowingResult
+        ? 'Code'
+        : (isHtml ? 'Preview' : (isRunning ? 'Running' : 'Run'));
     final icon = isShowingResult
         ? Icons.code_rounded
         : (isHtml ? Icons.visibility_rounded : Icons.play_arrow_rounded);
 
-    final Color base = isShowingResult ? ClayColors.warmGrey : ClayColors.goldHighlight;
-    final Color highlight = isShowingResult ? ClayColors.highlight : const Color(0xFFFFF7F5);
-    final Color shadow = isShowingResult ? ClayColors.shadow : ClayColors.goldShadow;
-    final Color textColor = isShowingResult ? ClayColors.textMuted : ClayColors.goldAccent;
+    final Color base = isShowingResult
+        ? ClayColors.warmGrey
+        : ClayColors.goldHighlight;
+    final Color highlight = isShowingResult
+        ? ClayColors.highlight
+        : const Color(0xFFFFF7F5);
+    final Color shadow = isShowingResult
+        ? ClayColors.shadow
+        : ClayColors.goldShadow;
+    final Color textColor = isShowingResult
+        ? ClayColors.textMuted
+        : ClayColors.goldAccent;
 
     return ClayButton(
       onTap: onTap,

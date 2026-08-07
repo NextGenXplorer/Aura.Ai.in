@@ -1,9 +1,11 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:aura_mobile/ai/run_anywhere_service.dart';
+import 'package:aura_mobile/core/services/download_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:aura_mobile/core/providers/ai_providers.dart';
+import 'package:aura_mobile/core/services/device_service.dart';
+import 'package:aura_mobile/domain/entities/model_info.dart';
 import 'package:aura_mobile/presentation/widgets/clay_components.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:path_provider/path_provider.dart';
@@ -12,7 +14,8 @@ class ModelDownloadScreen extends ConsumerStatefulWidget {
   const ModelDownloadScreen({super.key});
 
   @override
-  ConsumerState<ModelDownloadScreen> createState() => _ModelDownloadScreenState();
+  ConsumerState<ModelDownloadScreen> createState() =>
+      _ModelDownloadScreenState();
 }
 
 class _ModelDownloadScreenState extends ConsumerState<ModelDownloadScreen> {
@@ -22,7 +25,8 @@ class _ModelDownloadScreenState extends ConsumerState<ModelDownloadScreen> {
   String? _statusMessage;
   String? _taskId;
   // Small lightweight model for mobile
-  final String _modelUrl = "https://hf-mirror.com/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf?download=true";
+  final String _modelUrl =
+      "https://hf-mirror.com/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf?download=true";
   final String _modelFileName = "qwen2.5-0.5b-instruct-q4_k_m.gguf";
   StreamSubscription? _subscription;
 
@@ -33,38 +37,40 @@ class _ModelDownloadScreenState extends ConsumerState<ModelDownloadScreen> {
   }
 
   Future<void> _checkExistingDownloads() async {
-    final runAnywhere = ref.read(runAnywhereProvider);
-    
+    final downloadService = ref.read(downloadServiceProvider);
+
     // Check if there is an active task for our model URL
     // In new engine, Task ID = URL
-    final taskId = await runAnywhere.getTaskIdForUrl(_modelUrl);
-    
+    final taskId = await Future.value(
+      null,
+    ); // No persistent task query in new download service
+
     if (taskId != null) {
-       // If we found a "task", it means we think it might be running. 
-       // But getTaskIdForUrl just returns the URL in current stub.
-       // We should rely on the stream updates or file existence for "complete".
-       
-       // Check if file exists to see if complete
-       final docsDir = await getApplicationDocumentsDirectory();
-       final file = File('${docsDir.path}/$_modelFileName');
-       if (await file.exists()) {
-           // We might want to verify size or checksum, but for now assume if it exists it handles it?
-           // Or simpler: if it's running via Workmanager, we will get stream updates.
-           // If it's done, we might not get updates if app was killed.
-           // Let's assume we wait for user to click download if not sure, OR
-           // check if we have a way to query Workmanager status?
-           // For now, let's just check file existence as "Complete" if it's large enough?
-           // Actually, let's just let the UI be "Ready to Download" unless we catch a running stream.
-           
-           // If we wanted to auto-resume UI from a running task, we'd need Workmanager info.
-           // Since we don't have that easily, we'll listen to the stream.
-           // If a task is actually running, the worker will send updates to the port.
-           // So logging in will catch it.
-       }
-       
-       // Force listen just in case
-        _taskId = taskId;
-        _listenToDownload(taskId);
+      // If we found a "task", it means we think it might be running.
+      // But getTaskIdForUrl just returns the URL in current stub.
+      // We should rely on the stream updates or file existence for "complete".
+
+      // Check if file exists to see if complete
+      final docsDir = await getApplicationDocumentsDirectory();
+      final file = File('${docsDir.path}/$_modelFileName');
+      if (await file.exists()) {
+        // We might want to verify size or checksum, but for now assume if it exists it handles it?
+        // Or simpler: if it's running via Workmanager, we will get stream updates.
+        // If it's done, we might not get updates if app was killed.
+        // Let's assume we wait for user to click download if not sure, OR
+        // check if we have a way to query Workmanager status?
+        // For now, let's just check file existence as "Complete" if it's large enough?
+        // Actually, let's just let the UI be "Ready to Download" unless we catch a running stream.
+
+        // If we wanted to auto-resume UI from a running task, we'd need Workmanager info.
+        // Since we don't have that easily, we'll listen to the stream.
+        // If a task is actually running, the worker will send updates to the port.
+        // So logging in will catch it.
+      }
+
+      // Force listen just in case
+      _taskId = taskId;
+      _listenToDownload(taskId);
     }
   }
 
@@ -75,60 +81,74 @@ class _ModelDownloadScreenState extends ConsumerState<ModelDownloadScreen> {
   }
 
   void _listenToDownload(String taskId) {
-      final runAnywhere = ref.read(runAnywhereProvider);
-      _subscription?.cancel();
-      _subscription = runAnywhere.downloadUpdates.listen((update) {
-          if (update.id == taskId) {
-              if (mounted) {
-                  setState(() {
-                      _progress = update.progress / 100;
-                      if (update.status == DownloadTaskStatus.running) {
-                        _statusMessage = "Downloading: ${update.progress}%";
-                      } else if (update.status == DownloadTaskStatus.enqueued) {
-                        _statusMessage = "Queued for download...";
-                        _progress = 0;
-                      } else if (update.status == DownloadTaskStatus.paused) {
-                        _statusMessage = "Download paused";
-                      }
-                  });
-                  
-                  if (update.status == DownloadTaskStatus.complete) {
-                      _onDownloadComplete();
-                  } else if (update.status == DownloadTaskStatus.failed) {
-                      setState(() {
-                        _error = "Download failed. Please try again.";
-                        _isDownloading = false;
-                        _statusMessage = null;
-                      });
-                  }
-              }
+    final downloadService = ref.read(downloadServiceProvider);
+    _subscription?.cancel();
+    _subscription = downloadService.downloadUpdates.listen((update) {
+      if (update.id == taskId) {
+        if (mounted) {
+          setState(() {
+            _progress = update.progress / 100;
+            if (update.status == DownloadTaskStatus.running) {
+              _statusMessage = "Downloading: ${update.progress}%";
+            } else if (update.status == DownloadTaskStatus.enqueued) {
+              _statusMessage = "Queued for download...";
+              _progress = 0;
+            } else if (update.status == DownloadTaskStatus.paused) {
+              _statusMessage = "Download paused";
+            }
+          });
+
+          if (update.status == DownloadTaskStatus.complete) {
+            _onDownloadComplete();
+          } else if (update.status == DownloadTaskStatus.failed) {
+            setState(() {
+              _error = "Download failed. Please try again.";
+              _isDownloading = false;
+              _statusMessage = null;
+            });
           }
-      });
+        }
+      }
+    });
   }
 
   Future<void> _onDownloadComplete() async {
-      setState(() {
-        _statusMessage = "Initializing AI Engine...";
-      });
+    setState(() {
+      _statusMessage = "Initializing AI Engine...";
+    });
 
-      try {
-        final docsDir = await getApplicationDocumentsDirectory();
-        final modelPath = '${docsDir.path}/$_modelFileName';
+    try {
+      final docsDir = await getApplicationDocumentsDirectory();
+      final modelPath = '${docsDir.path}/$_modelFileName';
 
-        // After download, initialize the chat with this model
-        final llmService = ref.read(llmServiceProvider);
-        await llmService.loadModel(modelPath);
-        
-        // Navigate to Chat Screen
-        if (mounted) {
-          Navigator.of(context).pushReplacementNamed('/chat');
-        }
-      } catch (e) {
-         setState(() {
-            _error = "Initialization failed: $e";
-            _isDownloading = false;
-         });
+      // Persist identity and path together so Aura (and Aura Brain) agree on
+      // which local model is selected.
+      final model = modelCatalog
+          .where((candidate) => candidate.fileName == _modelFileName)
+          .firstOrNull;
+      if (model == null) {
+        throw StateError(
+          'This model is not in the Aura catalog. Use Model Manager instead.',
+        );
       }
+      await ref
+          .read(llmRouterProvider)
+          .selectLocalModel(
+            model: model,
+            path: modelPath,
+            deviceService: ref.read(deviceServiceProvider),
+          );
+
+      // Navigate to Chat Screen
+      if (mounted) {
+        Navigator.of(context).pushReplacementNamed('/chat');
+      }
+    } catch (e) {
+      setState(() {
+        _error = "Initialization failed: $e";
+        _isDownloading = false;
+      });
+    }
   }
 
   Future<void> _startDownload() async {
@@ -142,37 +162,33 @@ class _ModelDownloadScreenState extends ConsumerState<ModelDownloadScreen> {
     try {
       final docsDir = await getApplicationDocumentsDirectory();
       final modelPath = '${docsDir.path}/$_modelFileName';
-      
+
       // Ensure directory exists
       final modelDir = Directory(docsDir.path);
       if (!await modelDir.exists()) {
         await modelDir.create(recursive: true);
       }
-      
-      // Check if file exists and delete it to force fresh download if requested 
+
+      // Check if file exists and delete it to force fresh download if requested
       // (or let downloader resume. here we will rely on downloader, but maybe we should warn?)
       // For now, we trust flow. But let's verify path.
       final file = File(modelPath);
       if (await file.exists()) {
-         // Optionally check size? 
-         // For now, let's just proceed. FlutterDownloader handles resumption.
+        // Optionally check size?
+        // For now, let's just proceed. FlutterDownloader handles resumption.
       }
 
-      // Use RunAnywhere to handle download logic including deduplication
-      final runAnywhere = ref.read(runAnywhereProvider);
-      
-      final taskId = await runAnywhere.downloadModel(
-        _modelUrl,
-        modelPath,
-      );
+      // Use DownloadService to handle download logic including deduplication
+      final downloadService = ref.read(downloadServiceProvider);
+
+      final taskId = await downloadService.downloadModel(_modelUrl, modelPath);
 
       if (taskId != null) {
-         _taskId = taskId;
-         _listenToDownload(taskId);
+        _taskId = taskId;
+        _listenToDownload(taskId);
       } else {
-         throw Exception("Failed to start download (taskId is null)");
+        throw Exception("Failed to start download (taskId is null)");
       }
-
     } catch (e, stack) {
       print('Download Error: $e');
       print('Stack Trace: $stack');
@@ -204,7 +220,11 @@ class _ModelDownloadScreenState extends ConsumerState<ModelDownloadScreen> {
                 baseColor: ClayColors.goldAccent.withOpacity(0.12),
                 highlightColor: ClayColors.highlight,
                 shadowColor: ClayColors.shadow,
-                child: const Icon(Icons.download_for_offline_rounded, size: 60, color: ClayColors.goldAccent),
+                child: const Icon(
+                  Icons.download_for_offline_rounded,
+                  size: 60,
+                  color: ClayColors.goldAccent,
+                ),
               ),
               const SizedBox(height: 32),
               Text(
@@ -231,14 +251,17 @@ class _ModelDownloadScreenState extends ConsumerState<ModelDownloadScreen> {
                 const SizedBox(height: 16),
                 Text(
                   _statusMessage ?? 'Preparing...',
-                  style: GoogleFonts.outfit(color: ClayColors.textMuted, fontSize: 14),
+                  style: GoogleFonts.outfit(
+                    color: ClayColors.textMuted,
+                    fontSize: 14,
+                  ),
                 ),
                 const SizedBox(height: 32),
                 ClayButton(
                   onTap: () async {
                     if (_taskId != null) {
-                       final runAnywhere = ref.read(runAnywhereProvider);
-                       await runAnywhere.cancelDownload(_taskId!);
+                      final downloadService = ref.read(downloadServiceProvider);
+                      await downloadService.cancelDownload(_taskId!);
                     }
                     setState(() {
                       _isDownloading = false;
@@ -250,8 +273,14 @@ class _ModelDownloadScreenState extends ConsumerState<ModelDownloadScreen> {
                   highlightColor: ClayColors.highlight,
                   shadowColor: ClayColors.shadow,
                   borderRadius: 14,
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                  child: Text('Cancel', style: GoogleFonts.outfit(color: ClayColors.textMuted)),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
+                  ),
+                  child: Text(
+                    'Cancel',
+                    style: GoogleFonts.outfit(color: ClayColors.textMuted),
+                  ),
                 ),
                 const SizedBox(height: 24),
                 ClayContainer(
@@ -261,29 +290,36 @@ class _ModelDownloadScreenState extends ConsumerState<ModelDownloadScreen> {
                   padding: const EdgeInsets.all(16),
                   child: Row(
                     children: [
-                      const Icon(Icons.info_outline_rounded, color: ClayColors.goldAccent, size: 20),
+                      const Icon(
+                        Icons.info_outline_rounded,
+                        color: ClayColors.goldAccent,
+                        size: 20,
+                      ),
                       const SizedBox(width: 12),
                       Expanded(
-                          child: Text(
-                            'You can close the app. Download continues in background.',
-                            style: GoogleFonts.outfit(
-                              color: ClayColors.textMuted,
-                              fontSize: 12,
-                              height: 1.4,
-                            ),
+                        child: Text(
+                          'You can close the app. Download continues in background.',
+                          style: GoogleFonts.outfit(
+                            color: ClayColors.textMuted,
+                            fontSize: 12,
+                            height: 1.4,
                           ),
+                        ),
                       ),
                     ],
                   ),
                 ),
               ] else ...[
-                 if (_error != null)
+                if (_error != null)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 20),
                     child: Text(
                       _error!,
                       textAlign: TextAlign.center,
-                      style: GoogleFonts.outfit(color: ClayColors.redAccent, fontWeight: FontWeight.w600),
+                      style: GoogleFonts.outfit(
+                        color: ClayColors.redAccent,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ClayButton(
@@ -292,10 +328,17 @@ class _ModelDownloadScreenState extends ConsumerState<ModelDownloadScreen> {
                   highlightColor: ClayColors.goldHighlight,
                   shadowColor: ClayColors.goldShadow,
                   borderRadius: 18,
-                  padding: const EdgeInsets.symmetric(horizontal: 36, vertical: 16),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 36,
+                    vertical: 16,
+                  ),
                   child: Text(
                     'Download Model',
-                    style: GoogleFonts.outfit(fontSize: 16, fontWeight: FontWeight.bold, color: ClayColors.goldHighlight),
+                    style: GoogleFonts.outfit(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: ClayColors.goldHighlight,
+                    ),
                   ),
                 ),
               ],

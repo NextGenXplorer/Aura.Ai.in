@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:aura_mobile/presentation/widgets/clay_components.dart';
+import 'package:aura_mobile/core/services/app_navigator.dart';
+import 'package:aura_mobile/features/interactive_agent/ui/interactive_mode_screen.dart';
 
 class VoiceAssistantOverlay extends StatefulWidget {
   final Widget child;
@@ -58,6 +60,58 @@ class _VoiceAssistantOverlayState extends State<VoiceAssistantOverlay> with Tick
     _controller2.dispose();
     _controller3.dispose();
     super.dispose();
+  }
+
+  /// Opens Interactive Mode from the assistant popup. Uses the global navigator
+  /// so it works even though this overlay sits above the app's Navigator in the
+  /// MaterialApp builder.
+  void _openInteractiveMode() {
+    final navigator = auraNavigatorKey.currentState;
+    if (navigator == null) return;
+    navigator.push(
+      MaterialPageRoute(builder: (_) => const InteractiveModeScreen()),
+    );
+  }
+
+  Widget _buildInteractiveModePill() {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _openInteractiveMode,
+        borderRadius: BorderRadius.circular(24),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+          decoration: BoxDecoration(
+            color: ClayColors.goldAccent.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: ClayColors.goldAccent.withOpacity(0.35),
+              width: 1,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.auto_awesome_rounded,
+                size: 16,
+                color: ClayColors.goldAccent,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Interactive Mode',
+                style: GoogleFonts.outfit(
+                  color: ClayColors.textDark,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  decoration: TextDecoration.none,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildSiriOrb() {
@@ -243,6 +297,9 @@ class _VoiceAssistantOverlayState extends State<VoiceAssistantOverlay> with Tick
                         decoration: TextDecoration.none,
                       ),
                     ),
+                    const SizedBox(height: 14),
+                    // Quick hand-off to the full multi-step Interactive Mode.
+                    _buildInteractiveModePill(),
                     const Spacer(),
                     // Animated Morphing Orb with Crisp Floating Mic Button
                     Stack(

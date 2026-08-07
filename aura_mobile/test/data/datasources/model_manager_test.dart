@@ -15,12 +15,20 @@ class MockPathProviderPlatform extends Fake
   }
 }
 
+// The catalog is now 100% LiteRT (.litertlm). Tests use gemma3-1b, the smallest
+// entry, whose file is `gemma3-1b-it-int4.litertlm`.
+const _modelId = 'gemma3-1b';
+const _modelFileName = 'gemma3-1b-it-int4.litertlm';
+const _modelName = 'Gemma 3 1B';
+
+// LITERTLM container magic ('LITERTLM').
+const _litertlmMagic = [0x4C, 0x49, 0x54, 0x45, 0x52, 0x54, 0x4C, 0x4D];
+
 void main() {
   late ModelManager modelManager;
   late Directory testDir;
 
   setUpAll(() {
-    // Register mock path provider
     PathProviderPlatform.instance = MockPathProviderPlatform();
   });
 
@@ -35,80 +43,73 @@ void main() {
     }
   });
 
+  // Creates a file at the model's real path, of its expected size, with the
+  // given header bytes — without allocating the whole buffer in memory.
+  Future<File> createSizedFile(String modelId, List<int> header) async {
+    final path = await modelManager.getModelPath(modelId);
+    final model = modelManager.getModelById(modelId)!;
+    final file = File(path);
+    await file.create(recursive: true);
+    final raf = await file.open(mode: FileMode.write);
+    await raf.writeFrom(header);
+    await raf.setPosition(model.sizeBytes - 1);
+    await raf.writeByte(0);
+    await raf.close();
+    return file;
+  }
+
   group('ModelManager - File operations', () {
-    test('getDownloadedModels should return empty list when no models exist', () async {
+    test('getDownloadedModels returns empty list when no models exist', () async {
       final models = await modelManager.getDownloadedModels();
       expect(models, isEmpty);
     });
 
-    test('getDownloadedModels should return list of .gguf files', () async {
-      // Create test GGUF files
-      final docsDir = await modelManager.getModelPath('qwen2.5-0.5b');
-      final file1 = File('${testDir.path}${Platform.pathSeparator}test1.gguf');
-      final file2 = File('${testDir.path}${Platform.pathSeparator}test2.gguf');
-      final file3 = File('${testDir.path}${Platform.pathSeparator}test.txt');
-
-      await file1.writeAsString('test');
-      await file2.writeAsString('test');
-      await file3.writeAsString('test');
-
-      // Note: This test would need the actual application documents directory
-      // to be mocked properly. For now, we'll just verify the method doesn't crash.
+    test('getDownloadedModels returns a list', () async {
       final models = await modelManager.getDownloadedModels();
       expect(models, isA<List<String>>());
     });
 
-    test('getModelPath should return correct path for model', () async {
-      final path = await modelManager.getModelPath('qwen2.5-0.5b');
-
-      expect(path, contains('qwen2.5-0.5b-instruct-q4_k_m.gguf'));
+    test('getModelPath returns the correct path for a model', () async {
+      final path = await modelManager.getModelPath(_modelId);
+      expect(path, contains(_modelFileName));
       expect(path, contains(Platform.pathSeparator));
     });
 
-    test('getModelPath should throw ModelException for unknown model', () async {
+    test('getModelPath throws ModelException for unknown model', () async {
       expect(
         () => modelManager.getModelPath('unknown-model'),
         throwsA(isA<ModelException>()),
       );
     });
 
-    test('getModelById should return ModelInfo for valid ID', () {
-      final model = modelManager.getModelById('qwen2.5-0.5b');
-
+    test('getModelById returns ModelInfo for a valid ID', () {
+      final model = modelManager.getModelById(_modelId);
       expect(model, isNotNull);
-      expect(model!.id, 'qwen2.5-0.5b');
-      expect(model.name, 'Qwen 2.5 0.5B');
+      expect(model!.id, _modelId);
+      expect(model.name, _modelName);
     });
 
-    test('getModelById should return null for invalid ID', () {
-      final model = modelManager.getModelById('invalid-id');
-      expect(model, isNull);
+    test('getModelById returns null for an invalid ID', () {
+      expect(modelManager.getModelById('invalid-id'), isNull);
     });
   });
 
   group('ModelManager - Disk space validation', () {
-    test('getAvailableDiskSpace should return non-negative value', () async {
+    test('getAvailableDiskSpace returns a non-negative value', () async {
       final space = await modelManager.getAvailableDiskSpace();
-      // In test environment, disk space might be 0 or positive
       expect(space, greaterThanOrEqualTo(0));
     });
 
-    test('validateDiskSpace should throw when insufficient space', () async {
-      // This test is challenging because we can't easily simulate insufficient disk space
-      // In a real scenario, you'd mock DiskSpace.getFreeDiskSpace
-      // For now, we verify the method exists and handles the model lookup
-
+    test('validateDiskSpace either passes or reports insufficient space', () async {
       try {
-        await modelManager.validateDiskSpace('qwen2.5-0.5b');
-        // If no exception, disk space is sufficient (normal case)
+        await modelManager.validateDiskSpace(_modelId);
         expect(true, true);
       } on ModelException catch (e) {
-        // If exception, it should be about disk space
         expect(e.errorCode, 'MODEL_INSUFFICIENT_SPACE');
       }
     });
 
-    test('validateDiskSpace should throw ModelException for unknown model', () async {
+    test('validateDiskSpace throws ModelException for unknown model', () async {
       expect(
         () => modelManager.validateDiskSpace('unknown-model'),
         throwsA(isA<ModelException>()),
@@ -117,180 +118,78 @@ void main() {
   });
 
   group('ModelManager - Model validation', () {
-    test('isModelDownloaded should return false for non-existent model', () async {
-      final isDownloaded = await modelManager.isModelDownloaded('qwen2.5-0.5b');
-      expect(isDownloaded, false);
+    test('isModelDownloaded returns false for a non-existent model', () async {
+      expect(await modelManager.isModelDownloaded(_modelId), false);
     });
 
-    test('isModelDownloaded should return false for file with wrong size', () async {
-      // Create a file that's too small
-      final path = await modelManager.getModelPath('qwen2.5-0.5b');
+    test('isModelDownloaded returns false for a file of the wrong size', () async {
+      final path = await modelManager.getModelPath(_modelId);
       final file = File(path);
       await file.create(recursive: true);
-      await file.writeAsBytes([0x47, 0x47, 0x55, 0x46]); // GGUF magic bytes, but tiny file
+      await file.writeAsBytes(_litertlmMagic); // valid header, tiny file
 
-      final isDownloaded = await modelManager.isModelDownloaded('qwen2.5-0.5b');
-      expect(isDownloaded, false);
-
-      // Cleanup
+      expect(await modelManager.isModelDownloaded(_modelId), false);
       await file.delete();
     });
 
-    test('verifyAndCleanupModel should delete corrupt file', () async {
-      // Create a corrupt file (too small)
-      final path = await modelManager.getModelPath('qwen2.5-0.5b');
+    test('verifyAndCleanupModel deletes a corrupt (too-small) file', () async {
+      final path = await modelManager.getModelPath(_modelId);
       final file = File(path);
       await file.create(recursive: true);
-      await file.writeAsBytes([0x47, 0x47, 0x55, 0x46, 0x00]); // GGUF magic + 1 byte
+      await file.writeAsBytes([..._litertlmMagic, 0x00]);
 
-      final result = await modelManager.verifyAndCleanupModel('qwen2.5-0.5b');
+      final result = await modelManager.verifyAndCleanupModel(_modelId);
       expect(result, false);
-      expect(await file.exists(), false); // File should be deleted
+      expect(await file.exists(), false);
     });
 
-    test('verifyAndCleanupModel should return false for non-existent model', () async {
-      final result = await modelManager.verifyAndCleanupModel('qwen2.5-0.5b');
-      expect(result, false);
-    });
-  });
-
-  group('ModelManager - GGUF format validation', () {
-    test('should accept valid GGUF magic bytes', () async {
-      final path = await modelManager.getModelPath('qwen2.5-0.5b');
-      final file = File(path);
-      await file.create(recursive: true);
-
-      // Write valid GGUF magic bytes (0x46554747 in little-endian)
-      // Plus enough data to pass size check
-      final bytes = List<int>.filled(400000000, 0);
-      bytes[0] = 0x47; // 'G'
-      bytes[1] = 0x47; // 'G'
-      bytes[2] = 0x55; // 'U'
-      bytes[3] = 0x46; // 'F'
-
-      await file.writeAsBytes(bytes);
-
-      final isDownloaded = await modelManager.isModelDownloaded('qwen2.5-0.5b');
-      expect(isDownloaded, true);
-
-      // Cleanup
-      await file.delete();
-    });
-
-    test('should reject invalid magic bytes', () async {
-      final path = await modelManager.getModelPath('qwen2.5-0.5b');
-      final file = File(path);
-      await file.create(recursive: true);
-
-      // Write wrong magic bytes but correct size
-      final bytes = List<int>.filled(400000000, 0);
-      bytes[0] = 0x00;
-      bytes[1] = 0x00;
-      bytes[2] = 0x00;
-      bytes[3] = 0x00;
-
-      await file.writeAsBytes(bytes);
-
-      final isDownloaded = await modelManager.isModelDownloaded('qwen2.5-0.5b');
-      expect(isDownloaded, false);
-
-      // Cleanup
-      await file.delete();
+    test('verifyAndCleanupModel returns false for a non-existent model', () async {
+      expect(await modelManager.verifyAndCleanupModel(_modelId), false);
     });
   });
 
   group('ModelManager - LiteRT format validation', () {
-    // Helper: create a file of the model's expected size with the given header
-    // bytes at the start, without allocating the whole buffer in memory.
-    Future<File> createSizedFile(String modelId, List<int> header) async {
-      final path = await modelManager.getModelPath(modelId);
-      final model = modelManager.getModelById(modelId)!;
-      final file = File(path);
-      await file.create(recursive: true);
-      final raf = await file.open(mode: FileMode.write);
-      await raf.writeFrom(header);
-      // Extend the file to the expected size so the size check passes.
-      await raf.setPosition(model.sizeBytes - 1);
-      await raf.writeByte(0);
-      await raf.close();
-      return file;
-    }
-
-    test('accepts valid .task container (ZIP local-file-header)', () async {
-      // gemma3-1b is the smallest .task LiteRT model.
-      final file = await createSizedFile('gemma3-1b', [0x50, 0x4B, 0x03, 0x04]);
-
-      final isDownloaded = await modelManager.isModelDownloaded('gemma3-1b');
-      expect(isDownloaded, true);
-
+    test('accepts a valid .litertlm container of the right size', () async {
+      final file = await createSizedFile(_modelId, _litertlmMagic);
+      expect(await modelManager.isModelDownloaded(_modelId), true);
       await file.delete();
     });
 
-    test('rejects .task container with invalid header', () async {
-      final file = await createSizedFile('gemma3-1b', [0x00, 0x00, 0x00, 0x00]);
-
-      final isDownloaded = await modelManager.isModelDownloaded('gemma3-1b');
-      expect(isDownloaded, false);
-
-      await file.delete();
-    });
-
-    test('treats a too-small .task file as not downloaded (size gate)', () async {
-      final path = await modelManager.getModelPath('gemma3-1b');
-      final file = File(path);
-      await file.create(recursive: true);
-      await file.writeAsBytes([0x50, 0x4B, 0x03, 0x04]); // valid header, tiny
-
-      expect(await modelManager.isModelDownloaded('gemma3-1b'), false);
-
+    test('rejects a .litertlm file with an invalid header', () async {
+      final file = await createSizedFile(_modelId, [0x00, 0x00, 0x00, 0x00]);
+      expect(await modelManager.isModelDownloaded(_modelId), false);
       await file.delete();
     });
 
     test('treats a too-small .litertlm file as not downloaded (size gate)', () async {
-      // gemma4-e2b is a .litertlm model; a tiny file fails the size check.
-      final path = await modelManager.getModelPath('gemma4-e2b');
+      final path = await modelManager.getModelPath(_modelId);
       final file = File(path);
       await file.create(recursive: true);
-      await file.writeAsBytes([0x4C, 0x49, 0x54, 0x45, 0x52, 0x54, 0x4C, 0x4D]);
-
-      expect(await modelManager.isModelDownloaded('gemma4-e2b'), false);
-
+      await file.writeAsBytes(_litertlmMagic);
+      expect(await modelManager.isModelDownloaded(_modelId), false);
       await file.delete();
-    });
-
-    test('verifyAndCleanupModel deletes a corrupt LiteRT file', () async {
-      // Too-small file fails the size check and is treated as corrupt.
-      final path = await modelManager.getModelPath('gemma3-1b');
-      final file = File(path);
-      await file.create(recursive: true);
-      await file.writeAsBytes([0x50, 0x4B, 0x03, 0x04]); // valid header, tiny size
-
-      final result = await modelManager.verifyAndCleanupModel('gemma3-1b');
-      expect(result, false);
-      expect(await file.exists(), false);
     });
   });
 
   group('ModelManager - Model deletion', () {
-    test('deleteModel should remove existing model file', () async {
-      final path = await modelManager.getModelPath('qwen2.5-0.5b');
+    test('deleteModel removes an existing model file', () async {
+      final path = await modelManager.getModelPath(_modelId);
       final file = File(path);
       await file.create(recursive: true);
       await file.writeAsString('test');
 
-      await modelManager.deleteModel('qwen2.5-0.5b');
-
+      await modelManager.deleteModel(_modelId);
       expect(await file.exists(), false);
     });
 
-    test('deleteModel should throw for non-existent model', () async {
+    test('deleteModel throws for a non-existent model file', () async {
       expect(
-        () => modelManager.deleteModel('qwen2.5-0.5b'),
+        () => modelManager.deleteModel(_modelId),
         throwsA(isA<ModelException>()),
       );
     });
 
-    test('deleteModel should throw for unknown model ID', () async {
+    test('deleteModel throws for an unknown model ID', () async {
       expect(
         () => modelManager.deleteModel('unknown-model'),
         throwsA(isA<ModelException>()),
@@ -299,27 +198,22 @@ void main() {
   });
 
   group('ModelManager - Model size operations', () {
-    test('getModelSize should return 0 for non-existent model', () async {
-      final size = await modelManager.getModelSize('qwen2.5-0.5b');
-      expect(size, 0);
+    test('getModelSize returns 0 for a non-existent model', () async {
+      expect(await modelManager.getModelSize(_modelId), 0);
     });
 
-    test('getModelSize should return correct size for existing file', () async {
-      final path = await modelManager.getModelPath('qwen2.5-0.5b');
+    test('getModelSize returns the correct size for an existing file', () async {
+      final path = await modelManager.getModelPath(_modelId);
       final file = File(path);
       await file.create(recursive: true);
-      await file.writeAsBytes(List.filled(1024, 0)); // 1KB
+      await file.writeAsBytes(List.filled(1024, 0));
 
-      final size = await modelManager.getModelSize('qwen2.5-0.5b');
-      expect(size, 1024);
-
-      // Cleanup
+      expect(await modelManager.getModelSize(_modelId), 1024);
       await file.delete();
     });
 
-    test('getTotalStorageUsed should return 0 when no models downloaded', () async {
-      final total = await modelManager.getTotalStorageUsed();
-      expect(total, 0);
+    test('getTotalStorageUsed returns 0 when no models are downloaded', () async {
+      expect(await modelManager.getTotalStorageUsed(), 0);
     });
   });
 }

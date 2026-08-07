@@ -81,7 +81,7 @@ List<ToolDefinition> _parsePresentedTools(String prompt) {
 
   final tools = <ToolDefinition>[];
   for (final raw in lines.skip(headerIndex + 1)) {
-    final line = raw.trimRight();
+    final line = raw.trimLeft();
     if (!line.startsWith('- ')) continue;
     final body = line.substring(2); // strip "- "
     final open = body.indexOf('(');
@@ -95,10 +95,12 @@ List<ToolDefinition> _parsePresentedTools(String prompt) {
     final paramsStr = body.substring(open + 1, close).trim();
     final params = <ToolParameter>[];
     if (paramsStr.isNotEmpty) {
-      for (final segment in paramsStr.split(', ')) {
-        final isRequired = segment.endsWith(' (required)');
-        final pName =
-            isRequired ? segment.substring(0, segment.length - ' (required)'.length) : segment;
+      // Each param is: "name (string, required)" or "name (string)"
+      // Use regex to match each param block reliably.
+      final paramRegex = RegExp(r'(\w+) \(string(?:, required)?\)');
+      for (final match in paramRegex.allMatches(paramsStr)) {
+        final pName = match.group(1)!;
+        final isRequired = match.group(0)!.contains('required');
         params.add(ToolParameter(name: pName, required: isRequired));
       }
     }

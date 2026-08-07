@@ -134,21 +134,40 @@ class AutomationEngine {
         break;
 
       case TriggerType.conditionBased:
-        if (rule.checkInterval < const Duration(minutes: 15)) {
-          errors.add(const ValidationError(
-            field: 'checkInterval',
-            message: 'Check interval must be at least 15 minutes',
-          ));
-        } else if (rule.checkInterval > const Duration(hours: 24)) {
-          errors.add(const ValidationError(
-            field: 'checkInterval',
-            message: 'Check interval must not exceed 24 hours',
-          ));
-        }
+        errors.add(const ValidationError(
+          field: 'condition',
+          message:
+              'Condition-based background evaluation is not available yet. Choose another trigger.',
+        ));
         break;
 
       default:
         break;
+    }
+
+    final usesWorkmanager =
+        rule.triggerType == TriggerType.scheduled ||
+        rule.triggerType == TriggerType.recurring;
+    if (usesWorkmanager && rule.isWorkflow) {
+      const backgroundSafeSteps = {
+        'webSearch',
+        'saveMemory',
+        'showNotification',
+      };
+      final unsupported = rule.workflowSteps
+          .map((step) => step.type)
+          .where((type) => !backgroundSafeSteps.contains(type))
+          .toSet()
+          .toList();
+      if (unsupported.isNotEmpty) {
+        errors.add(
+          ValidationError(
+            field: 'actionInstruction',
+            message:
+                'Scheduled/recurring rules only support Web Search, Save Memory, and Push Notification. Unsupported: ${unsupported.join(', ')}',
+          ),
+        );
+      }
     }
 
     return errors;
@@ -369,6 +388,11 @@ class AutomationEngine {
 
           case 'readScreen':
             final screenService = _ref.read(screenContextServiceProvider);
+            if (!await screenService.isAccessibilityEnabled()) {
+              throw StateError(
+                'Screen reading needs AURA Screen Reader enabled in Android Settings → Accessibility.',
+              );
+            }
             stepResult = await screenService.getScreenContent();
             break;
 
@@ -441,7 +465,9 @@ class AutomationEngine {
             final contact = resolvedParams['contact']?.toString() ?? '';
             final msg = resolvedParams['message']?.toString() ?? '';
             await appControl.sendSMS(contact, msg);
-            stepResult = 'Sent SMS to $contact';
+            // Android may send directly or hand off to the SMS app, so the
+            // outcome is reported as started rather than confirmed delivered.
+            stepResult = 'SMS to $contact started';
             break;
 
           // Action mappings for legacy tool execution
@@ -455,7 +481,7 @@ class AutomationEngine {
             final name = resolvedParams['name']?.toString() ?? '';
             final msg = resolvedParams['message']?.toString() ?? '';
             await appControl.sendSMS(name, msg);
-            stepResult = 'SMS sent to $name: "$msg"';
+            stepResult = 'SMS to $name started: "$msg"';
             break;
           case 'dial_contact':
             final contactName = resolvedParams['contactName']?.toString() ?? '';
@@ -505,14 +531,16 @@ class AutomationEngine {
             final msg = resolvedParams['message']?.toString() ?? '';
             final smartActions = _ref.read(smartAppActionsProvider);
             await smartActions.sendWhatsApp(contact, msg);
-            stepResult = 'WhatsApp sent to $contact: "$msg"';
+            // Deep links open WhatsApp with the message prefilled; the user
+            // still presses send, so this is not a confirmed delivery.
+            stepResult = 'WhatsApp opened for $contact: "$msg"';
             break;
 
           case 'play_spotify':
             final query = resolvedParams['query']?.toString() ?? '';
             final smartActions = _ref.read(smartAppActionsProvider);
             await smartActions.playOnSpotify(query);
-            stepResult = 'Playing "$query" on Spotify';
+            stepResult = 'Spotify opened for "$query"';
             break;
 
           case 'upi_payment':
@@ -521,7 +549,9 @@ class AutomationEngine {
             final note = resolvedParams['note']?.toString();
             final smartActions = _ref.read(smartAppActionsProvider);
             await smartActions.makeUpiPayment(upiId: upiId, amount: amount, note: note);
-            stepResult = 'UPI payment of ₹$amount to $upiId';
+            // Aura never completes a payment; the UPI app requires user
+            // confirmation and authentication.
+            stepResult = 'UPI app opened for ₹$amount to $upiId (needs your approval)';
             break;
 
           case 'book_ride':
@@ -529,7 +559,7 @@ class AutomationEngine {
             final app = resolvedParams['app']?.toString();
             final smartActions = _ref.read(smartAppActionsProvider);
             await smartActions.bookRide(destination, app: app);
-            stepResult = 'Booking ride to $destination';
+            stepResult = 'Ride app opened for $destination (booking needs your confirmation)';
             break;
 
           case 'order_food':
@@ -537,7 +567,8 @@ class AutomationEngine {
             final app = resolvedParams['app']?.toString();
             final smartActions = _ref.read(smartAppActionsProvider);
             await smartActions.orderFood(restaurant: restaurant, app: app);
-            stepResult = 'Ordering food${restaurant != null ? ' from $restaurant' : ''}';
+            stepResult =
+                'Food app opened${restaurant != null ? ' for $restaurant' : ''} (ordering needs your confirmation)';
             break;
 
           case 'share_content':
@@ -545,7 +576,7 @@ class AutomationEngine {
             final app = resolvedParams['app']?.toString();
             final smartActions = _ref.read(smartAppActionsProvider);
             await smartActions.shareText(text, app: app);
-            stepResult = 'Shared text${app != null ? ' to $app' : ''}';
+            stepResult = 'Share sheet opened${app != null ? ' for $app' : ''}';
             break;
 
           case 'open_profile':
@@ -557,10 +588,16 @@ class AutomationEngine {
             break;
 
           default:
-            stepResult = 'Skipped unknown step: ${step.type}';
+            throw UnsupportedError('Unsupported workflow step "${step.type}"');
         }
       } catch (e) {
-        stepResult = 'Failed: $e';
+        // A failing step used to be recorded as a normal result, so the rule
+        // still reported success. Abort instead so the caller can surface it.
+        throw StateError('Step ${i + 1} (${step.type}) failed: $e');
+      }
+
+      if (stepResult.trim().isEmpty) {
+        throw StateError('Step ${i + 1} (${step.type}) produced no result.');
       }
 
       context[stepId] = stepResult;

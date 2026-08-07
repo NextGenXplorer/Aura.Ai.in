@@ -1,13 +1,17 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:aura_mobile/core/errors/app_exceptions.dart';
+import 'package:aura_mobile/core/services/app_navigator.dart';
+import 'package:aura_mobile/core/services/speech_chunker.dart';
 import 'package:aura_mobile/domain/services/document_service.dart';
 import 'package:aura_mobile/core/services/voice_service.dart';
 import 'package:aura_mobile/features/orchestrator/orchestrator_service.dart';
+import 'package:aura_mobile/features/interactive_agent/interactive_agent_providers.dart';
 import 'package:aura_mobile/core/providers/ai_providers.dart';
+import 'package:aura_mobile/data/datasources/llm_service.dart';
 import 'package:aura_mobile/presentation/providers/persona_provider.dart';
 import 'package:aura_mobile/domain/services/context_builder_service.dart';
 
@@ -63,6 +67,9 @@ class ChatState {
 class ChatNotifier extends StateNotifier<ChatState> {
   final Ref _ref;
   bool _isProcessing = false; // Mutex for concurrent call prevention
+  bool _cancelRequested = false;
+  int _generationSequence = 0;
+  int? _activeGenerationId;
   final _uuid = const Uuid();
 
   ChatNotifier(this._ref) : super(ChatState()) {
@@ -81,36 +88,28 @@ class ChatNotifier extends StateNotifier<ChatState> {
   Future<void> _initializeAI() async {
     try {
       state = state.copyWith(isModelLoading: true);
-      final llmService = _ref.read(llmServiceProvider);
-      await llmService.initialize();
-      
-      // Auto-load last selected model
+      final router = _ref.read(llmRouterProvider);
+      await router.initialize();
+
       final prefs = await SharedPreferences.getInstance();
-      final modelPath = prefs.getString('selected_model_path');
-      
-      if (modelPath != null && modelPath.isNotEmpty) {
-        // Check if the last load crashed (e.g. native SIGSEGV)
-        final crashed = prefs.getBool('model_load_crashed_sentinel') ?? false;
-        if (crashed) {
-          debugPrint('ChatNotifier: Detected crash during last model load. Clearing model path to prevent boot loop.');
-          await prefs.remove('selected_model_path');
-          await prefs.remove('active_model_id');
-          await prefs.setBool('model_load_crashed_sentinel', false);
-          return;
-        }
-
-        // Set sentinel before loading
-        await prefs.setBool('model_load_crashed_sentinel', true);
-
-        debugPrint('ChatNotifier: Auto-loading model from $modelPath');
-        await llmService.loadModel(modelPath);
-
-        // Clear sentinel on success
+      final isOffline = prefs.getString('active_llm_backend') != 'online';
+      final crashed = prefs.getBool('model_load_crashed_sentinel') ?? false;
+      if (isOffline && crashed) {
+        debugPrint(
+          'ChatNotifier: Detected crash during the previous local model load.',
+        );
+        await router.removeLocalSelection();
         await prefs.setBool('model_load_crashed_sentinel', false);
-      } else {
-        debugPrint('ChatNotifier: No model selected. User must select a model.');
+        return;
       }
-      _ref.read(contextWindowProvider.notifier).updateModelTier(llmService.modelTier);
+
+      await router.restoreActiveSelection();
+      if (!router.isModelLoaded) {
+        debugPrint('ChatNotifier: No usable local or online model selected.');
+      }
+      _ref
+          .read(contextWindowProvider.notifier)
+          .updateModelTier(router.modelTier);
     } catch (e) {
       debugPrint('Error initializing AI: $e');
       try {
@@ -127,16 +126,18 @@ class ChatNotifier extends StateNotifier<ChatState> {
     // Repository might return metadata only, check if messages are empty
     var fullSession = session;
     if (session.messages.isEmpty) {
-        final repo = _ref.read(chatHistoryRepositoryProvider);
-        final loaded = await repo.getSession(session.id);
-        if (loaded != null) fullSession = loaded;
+      final repo = _ref.read(chatHistoryRepositoryProvider);
+      final loaded = await repo.getSession(session.id);
+      if (loaded != null) fullSession = loaded;
     }
 
     state = state.copyWith(
       sessionId: fullSession.id,
       messages: fullSession.messages,
     );
-    _ref.read(contextWindowProvider.notifier).updateFromMessagesFast(state.messages);
+    _ref
+        .read(contextWindowProvider.notifier)
+        .updateFromMessagesFast(state.messages);
   }
 
   // Debounce timer for _saveChat — collapses rapid save calls during streaming
@@ -154,10 +155,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   Future<void> _doSaveChat() async {
     if (state.messages.isEmpty) return;
-    
+
     try {
       final repo = _ref.read(chatHistoryRepositoryProvider);
-      
+
       // Generate a title based on the first user message if possible
       String title = "New Chat";
       final firstUserMsg = state.messages.firstWhere(
@@ -166,7 +167,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
       );
       if (firstUserMsg.isNotEmpty && firstUserMsg['content'] != null) {
         final content = firstUserMsg['content']!;
-        title = content.length > 30 ? "${content.substring(0, 30)}..." : content;
+        title = content.length > 30
+            ? "${content.substring(0, 30)}..."
+            : content;
       }
 
       final session = ChatSession(
@@ -195,9 +198,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
   ///
   /// Vision goes straight to the model (bypassing the rule-based orchestrator
   /// intent layer) because the image itself is the context.
+  /// True when either a local model or an explicitly selected online model can
+  /// serve the turn.
+  bool _hasUsableModel() {
+    if (_ref.read(modelSelectorProvider).activeModelId != null) return true;
+    return _ref.read(llmRouterProvider).isModelLoaded;
+  }
+
   Future<void> sendImageMessage(String prompt, Uint8List imageBytes) async {
-    final modelState = _ref.read(modelSelectorProvider);
-    if (modelState.activeModelId == null || state.isModelLoading) {
+    if (!_hasUsableModel() || state.isModelLoading) {
       return;
     }
     if (_isProcessing) return;
@@ -213,12 +222,18 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _isProcessing = true;
 
     state = state.copyWith(
-      messages: [...state.messages, {'role': 'user', 'content': prompt}],
+      messages: [
+        ...state.messages,
+        {'role': 'user', 'content': prompt},
+      ],
       isThinking: true,
     );
     _saveChat();
     state = state.copyWith(
-      messages: [...state.messages, {'role': 'assistant', 'content': ''}],
+      messages: [
+        ...state.messages,
+        {'role': 'assistant', 'content': ''},
+      ],
     );
 
     try {
@@ -229,26 +244,36 @@ class ChatNotifier extends StateNotifier<ChatState> {
         temperature: 0.4,
         maxTokens: 1024,
       )) {
+        final scannedUpTo = fullResponse.length;
         fullResponse += chunk;
-        final cleaned = _truncateAtHallucination(fullResponse);
+        final cleaned = _truncateAtHallucination(
+          fullResponse,
+          scannedUpTo: scannedUpTo,
+        );
         if (cleaned != null) {
           fullResponse = cleaned;
-          _updateLastMessage(fullResponse);
           break;
         }
-        _updateLastMessage(fullResponse);
+        _queueStreamUpdate(fullResponse);
       }
+      _commitStreamUpdate(fullResponse);
       if (fullResponse.isEmpty) {
         _updateLastMessage(
-            "I couldn't analyze that image. Try a clearer photo or a different model.");
+          "I couldn't analyze that image. Try a clearer photo or a different model.",
+        );
       }
       _saveChat();
-      _ref.read(contextWindowProvider.notifier).updateFromMessagesFast(state.messages);
+      _ref
+          .read(contextWindowProvider.notifier)
+          .updateFromMessagesFast(state.messages);
     } catch (e) {
+      _cancelStreamUpdates();
       debugPrint('Error in sendImageMessage: $e');
       _updateLastMessage(
-          "I couldn't analyze that image. Make sure a vision model (e.g. Gemma 4) is loaded.");
+        "I couldn't analyze that image. Make sure a vision model (e.g. Gemma 4) is loaded.",
+      );
     } finally {
+      _cancelStreamUpdates();
       state = state.copyWith(isThinking: false);
       _isProcessing = false;
     }
@@ -256,8 +281,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   Future<void> sendMessage(String text) async {
     // 0. Safety Checks
-    final modelState = _ref.read(modelSelectorProvider);
-    if (modelState.activeModelId == null || state.isModelLoading) {
+    if (!_hasUsableModel() || state.isModelLoading) {
       debugPrint('Model not ready, ignoring message');
       return;
     }
@@ -273,12 +297,17 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final engine = _ref.read(automationEngineProvider);
       final rules = await engine.getAllRules();
       for (final rule in rules) {
-        if (rule.isEnabled && rule.triggerType == TriggerType.conversationPattern) {
+        if (rule.isEnabled &&
+            rule.triggerType == TriggerType.conversationPattern) {
           final pattern = rule.condition ?? '';
-          if (pattern.isNotEmpty && text.toLowerCase().contains(pattern.toLowerCase())) {
+          if (pattern.isNotEmpty &&
+              text.toLowerCase().contains(pattern.toLowerCase())) {
             _isProcessing = true;
             state = state.copyWith(
-              messages: [...state.messages, {'role': 'user', 'content': text}],
+              messages: [
+                ...state.messages,
+                {'role': 'user', 'content': text},
+              ],
               isThinking: true,
             );
             _saveChat();
@@ -290,8 +319,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
                 ...state.messages,
                 {
                   'role': 'system',
-                  'content': 'automation_triggered:${rule.name} - $result'
-                }
+                  'content': 'automation_triggered:${rule.name} - $result',
+                },
               ],
               isThinking: false,
             );
@@ -306,6 +335,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
     }
 
     _isProcessing = true;
+    _cancelRequested = false;
+    final generationId = ++_generationSequence;
+    _activeGenerationId = generationId;
+    bool isCancelled() =>
+        _cancelRequested || _activeGenerationId != generationId;
+    OrchestratorService? requestOrchestrator;
+    List<String> requestHistory = const [];
+    var requestHasDocuments = false;
+    var requestIsConcise = false;
 
     // 0.5. Sync active persona system prompt
     try {
@@ -318,51 +356,70 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     // 1. Add User Message
     state = state.copyWith(
-      messages: [...state.messages, {'role': 'user', 'content': text}],
+      messages: [
+        ...state.messages,
+        {'role': 'user', 'content': text},
+      ],
       isThinking: true,
     );
     _saveChat(); // Save after user message
-    _ref.read(contextWindowProvider.notifier).updateFromMessagesFast(state.messages);
+    _ref
+        .read(contextWindowProvider.notifier)
+        .updateFromMessagesFast(state.messages);
     final baselineTokens = _ref.read(contextWindowProvider).estimatedTokens;
-    
+
     // Placeholder for Assistant Response
     state = state.copyWith(
-      messages: [...state.messages, {'role': 'assistant', 'content': ''}],
+      messages: [
+        ...state.messages,
+        {'role': 'assistant', 'content': ''},
+      ],
     );
 
     try {
       final orchestrator = _ref.read(orchestratorServiceProvider);
-      
+      requestOrchestrator = orchestrator;
+
       // Get chat history for context
       final allHistory = state.messages
-            .where((m) => m['role'] == 'user' || m['role'] == 'assistant')
-            .map((m) => "${m['role'] == 'user' ? 'User' : 'Assistant'}: ${m['content']}")
-            .toList();
-            
+          .where((m) => m['role'] == 'user' || m['role'] == 'assistant')
+          .map(
+            (m) =>
+                "${m['role'] == 'user' ? 'User' : 'Assistant'}: ${m['content']}",
+          )
+          .toList();
+
       // Pass a generous slice of recent history; the context builder applies
       // the final, tier-aware pruning to fit the model's context window.
       final history = allHistory.length > 12
           ? allHistory.sublist(allHistory.length - 12)
           : allHistory;
+      requestHistory = history;
 
       // Check if documents are available
       final documentService = _ref.read(documentServiceProvider);
       final hasDocuments = await documentService.hasDocuments();
+      requestHasDocuments = hasDocuments;
 
       // Delegate to Orchestrator
       debugPrint("ChatNotifier: Delegating message to Orchestrator");
       final isConcise = _ref.read(conciseModeProvider);
+      requestIsConcise = isConcise;
       final stream = orchestrator.processMessage(
-        message: isConcise 
-            ? '$text\n\n[System Instruction: Please keep your response extremely concise, direct, and under 2-3 sentences.]'
-            : text,
+        message: text,
         chatHistory: history,
         hasDocuments: hasDocuments,
+        isConcise: isConcise,
       );
 
       String fullResponse = '';
       bool emailMarkerHandled = false;
-      await for (final chunk in stream) {
+      await for (final rawChunk in stream) {
+        if (isCancelled()) break;
+        // Navigation markers are control signals, not text. Strip them and open
+        // the requested screen instead of printing the marker in the bubble.
+        final chunk = _consumeNavigationMarkers(rawChunk);
+        if (chunk.isEmpty) continue;
         // Intercept magic email draft marker emitted by orchestrator.
         // Insert system message for UI chip, then skip this chunk.
         if (!emailMarkerHandled && chunk.startsWith('__EMAIL_DRAFT__:')) {
@@ -374,76 +431,182 @@ class ChatNotifier extends StateNotifier<ChatState> {
           // If we append it after, it becomes the last message and
           // _updateLastMessage() can't find the assistant bubble to stream into.
           final msgs = List<Map<String, String>>.from(state.messages);
-          final lastAssistantIdx =
-              msgs.lastIndexWhere((m) => m['role'] == 'assistant');
+          final lastAssistantIdx = msgs.lastIndexWhere(
+            (m) => m['role'] == 'assistant',
+          );
           if (lastAssistantIdx >= 0) {
-            msgs.insert(lastAssistantIdx,
-                {'role': 'system', 'content': 'drafting_email_to:$address'});
+            msgs.insert(lastAssistantIdx, {
+              'role': 'system',
+              'content': 'drafting_email_to:$address',
+            });
           } else {
-            msgs.add(
-                {'role': 'system', 'content': 'drafting_email_to:$address'});
+            msgs.add({
+              'role': 'system',
+              'content': 'drafting_email_to:$address',
+            });
           }
           state = state.copyWith(messages: msgs);
           emailMarkerHandled = true;
           continue; // Don't show the marker in the assistant response
         }
+        final scannedUpTo = fullResponse.length;
         fullResponse += chunk;
 
-        // Anti-hallucination: check the FULL accumulated response for leaked
-        // stop markers / fake conversation turns. If found, truncate and stop.
-        final cleaned = _truncateAtHallucination(fullResponse);
+        // Anti-hallucination: check for leaked stop markers / fake conversation
+        // turns. Only the newly arrived tail is scanned. If found, truncate and
+        // stop.
+        final cleaned = _truncateAtHallucination(
+          fullResponse,
+          scannedUpTo: scannedUpTo,
+        );
         if (cleaned != null) {
           fullResponse = cleaned;
-          _updateLastMessage(fullResponse);
-          debugPrint('ChatNotifier: Hallucination marker detected — truncated response');
+          _commitStreamUpdate(fullResponse, baselineTokens: baselineTokens);
+          debugPrint(
+            'ChatNotifier: Hallucination marker detected — truncated response',
+          );
           break; // Stop consuming the stream entirely
         }
 
-        _updateLastMessage(fullResponse);
-        _ref.read(contextWindowProvider.notifier).updateStreamingTokens(baselineTokens, fullResponse);
+        _queueStreamUpdate(fullResponse, baselineTokens: baselineTokens);
       }
-      debugPrint('ChatNotifier: Stream completed. Full response length: ${fullResponse.length}');
+      // Publish whatever is still buffered before leaving the streaming path.
+      _commitStreamUpdate(fullResponse, baselineTokens: baselineTokens);
+      if (isCancelled()) {
+        debugPrint('ChatNotifier: Generation cancelled by user.');
+        _saveChat();
+        return;
+      }
+      debugPrint(
+        'ChatNotifier: Stream completed. Full response length: ${fullResponse.length}',
+      );
       _saveChat(); // Save after full response
-      _ref.read(contextWindowProvider.notifier).updateFromMessagesFast(state.messages);
-
-    } catch (e) {
-      debugPrint('Error in sendMessage: $e');
-      // Only show error if we have no partial response — otherwise keep what was generated
+      _ref
+          .read(contextWindowProvider.notifier)
+          .updateFromMessagesFast(state.messages);
+    } catch (error) {
+      // Drop any buffered chunk so a late flush can't overwrite the message
+      // this handler is about to write.
+      _cancelStreamUpdates();
+      if (error is GenerationCancelledException || isCancelled()) {
+        debugPrint('ChatNotifier: Generation cancelled by user.');
+        _saveChat();
+        return;
+      }
+      debugPrint('Error in sendMessage: $error');
       final lastMsg = state.messages.isNotEmpty ? state.messages.last : null;
-      final hasContent = lastMsg != null && 
-          lastMsg['role'] == 'assistant' && 
+      final hasContent =
+          lastMsg != null &&
+          lastMsg['role'] == 'assistant' &&
           (lastMsg['content'] ?? '').trim().isNotEmpty;
-      if (!hasContent) {
-        // Retry once before giving up
+      if (!hasContent &&
+          requestOrchestrator != null &&
+          _isRetryableGenerationError(error)) {
         try {
           debugPrint('ChatNotifier: Retrying inference...');
+          if (isCancelled()) return;
           await Future.delayed(const Duration(milliseconds: 500));
-          final orchestrator = _ref.read(orchestratorServiceProvider);
-          final retryStream = orchestrator.processMessage(
+          if (isCancelled()) return;
+          final retryStream = requestOrchestrator.processMessage(
             message: text,
-            chatHistory: [],
-            hasDocuments: false,
+            chatHistory: requestHistory,
+            hasDocuments: requestHasDocuments,
+            isConcise: requestIsConcise,
           );
+          if (isCancelled()) return;
           String retryResponse = '';
-          await for (final chunk in retryStream) {
+          await for (final rawChunk in retryStream) {
+            if (isCancelled()) break;
+            final chunk = _consumeNavigationMarkers(rawChunk);
+            if (chunk.isEmpty) continue;
+            final scannedUpTo = retryResponse.length;
             retryResponse += chunk;
-            _updateLastMessage(retryResponse);
+            final cleaned = _truncateAtHallucination(
+              retryResponse,
+              scannedUpTo: scannedUpTo,
+            );
+            if (cleaned != null) {
+              retryResponse = cleaned;
+              break;
+            }
+            _queueStreamUpdate(retryResponse);
+          }
+          _commitStreamUpdate(retryResponse);
+          if (isCancelled()) {
+            _saveChat();
+            return;
           }
           if (retryResponse.isEmpty) {
-            _updateLastMessage('The AI model is having trouble responding. Try restarting the app or using a simpler prompt.');
+            _updateLastMessage(
+              'The AI model is having trouble responding. Try restarting the app or using a simpler prompt.',
+            );
           }
         } catch (retryError) {
+          if (retryError is GenerationCancelledException || isCancelled()) {
+            debugPrint('ChatNotifier: Retry cancelled by user.');
+            _saveChat();
+            return;
+          }
           debugPrint('ChatNotifier: Retry also failed: $retryError');
-          _updateLastMessage('The AI model is having trouble responding. Try restarting the app or using a simpler prompt.');
+          _updateLastMessage(
+            'The AI model is having trouble responding. Try restarting the app or using a simpler prompt.',
+          );
         }
+      } else if (!hasContent) {
+        _updateLastMessage(
+          error is AIServiceException
+              ? error.userMessage
+              : 'The AI model could not respond. Please try again.',
+        );
       }
     } finally {
-      state = state.copyWith(isThinking: false);
-      _isProcessing = false; // Release mutex
+      _cancelStreamUpdates();
+      if (_activeGenerationId == generationId) {
+        state = state.copyWith(isThinking: false);
+        _isProcessing = false;
+        _cancelRequested = false;
+        _activeGenerationId = null;
+      }
     }
   }
 
+  /// Removes `__NAVIGATE__:<target>` control markers from [chunk] and performs
+  /// the requested navigation. Returns the displayable remainder.
+  String _consumeNavigationMarkers(String chunk) {
+    if (!chunk.contains(AppNavigator.marker)) return chunk;
 
+    return chunk.replaceAllMapped(
+      RegExp('${RegExp.escape(AppNavigator.marker)}([a-z_]+)'),
+      (match) {
+        final target = match.group(1) ?? '';
+        if (!AppNavigator.open(target)) {
+          debugPrint('ChatNotifier: unknown navigation target "$target"');
+        }
+        return '';
+      },
+    );
+  }
+
+  bool _isRetryableGenerationError(Object error) {
+    if (error is! AIServiceException) return false;
+    return const {
+      'AI_PROVIDER_TIMEOUT',
+      'AI_PROVIDER_OFFLINE',
+      'AI_PROVIDER_REQUEST_FAILED',
+      'AI_PROVIDER_INCOMPLETE_STREAM',
+      'AI_INFERENCE_TIMEOUT',
+    }.contains(error.errorCode);
+  }
+
+  Future<void> stopGeneration() async {
+    if (!_isProcessing) return;
+    _cancelRequested = true;
+    final service = _ref.read(llmServiceProvider);
+    if (service is CancellableLLMService) {
+      await (service as CancellableLLMService).cancelGeneration();
+    }
+    state = state.copyWith(isThinking: false);
+  }
 
   /// Detects hallucinated stop markers / fake conversation turns in the full
   /// accumulated response. Returns the truncated clean text if a marker is
@@ -470,10 +633,24 @@ class ChatNotifier extends StateNotifier<ChatState> {
     '\nAssistant:',
   ];
 
-  String? _truncateAtHallucination(String response) {
+  /// Longest marker length, used to overlap the scan window so a marker that
+  /// straddles two chunks is still detected.
+  static final int _longestMarkerLength = _hallucinationMarkers
+      .map((m) => m.length)
+      .reduce((a, b) => a > b ? a : b);
+
+  /// [scannedUpTo] is the length of [response] that was already checked by a
+  /// previous call. Only the new tail (plus a marker-length overlap) is
+  /// re-scanned, so the check costs O(chunk) per token instead of O(response) —
+  /// the old behaviour re-scanned the whole answer against 13 markers on every
+  /// single token, which grew quadratically over a long reply.
+  String? _truncateAtHallucination(String response, {int scannedUpTo = 0}) {
+    var from = scannedUpTo - _longestMarkerLength;
+    if (from < 0) from = 0;
+
     int earliestIdx = -1;
     for (final marker in _hallucinationMarkers) {
-      final idx = response.indexOf(marker);
+      final idx = response.indexOf(marker, from);
       if (idx >= 0 && (earliestIdx == -1 || idx < earliestIdx)) {
         earliestIdx = idx;
       }
@@ -484,12 +661,69 @@ class ChatNotifier extends StateNotifier<ChatState> {
     return null;
   }
 
+  // ── Streaming update coalescing ───────────────────────────────────────────
+  // Models emit tokens far faster than the UI can usefully repaint (commonly
+  // 30-60 chunks/second). Publishing new state per chunk forced a full
+  // rebuild — and a full markdown re-parse of the growing answer — per token,
+  // which overran the frame budget and made the screen feel frozen while a
+  // reply was coming in. Chunks are buffered instead and written to state at
+  // most once per [_streamFlushInterval], so text still flows continuously but
+  // at a repaint rate the device can actually sustain.
+  static const Duration _streamFlushInterval = Duration(milliseconds: 60);
+  Timer? _streamFlushTimer;
+  String? _pendingStreamText;
+  int _streamBaselineTokens = 0;
+
+  /// Buffers [content] as the latest assistant text, scheduling a flush.
+  void _queueStreamUpdate(String content, {int? baselineTokens}) {
+    if (baselineTokens != null) _streamBaselineTokens = baselineTokens;
+    _pendingStreamText = content;
+    _streamFlushTimer ??= Timer(_streamFlushInterval, () {
+      _streamFlushTimer = null;
+      final pending = _pendingStreamText;
+      if (pending == null) return;
+      _pendingStreamText = null;
+      _writeStreamText(pending);
+    });
+  }
+
+  /// Writes [content] immediately and drops any queued flush. Used at turn
+  /// boundaries (stream end, truncation, cancel, error) so the final text is
+  /// never left sitting in the buffer.
+  void _commitStreamUpdate(String content, {int? baselineTokens}) {
+    _streamFlushTimer?.cancel();
+    _streamFlushTimer = null;
+    _pendingStreamText = null;
+    if (baselineTokens != null) _streamBaselineTokens = baselineTokens;
+    _writeStreamText(content);
+  }
+
+  /// Discards buffered text without publishing it.
+  void _cancelStreamUpdates() {
+    _streamFlushTimer?.cancel();
+    _streamFlushTimer = null;
+    _pendingStreamText = null;
+  }
+
+  void _writeStreamText(String content) {
+    _updateLastMessage(content);
+    // Token estimate rides along with the text update instead of firing its
+    // own notification per chunk (that was a second full rebuild per token).
+    _ref
+        .read(contextWindowProvider.notifier)
+        .updateStreamingTokens(_streamBaselineTokens, content);
+  }
+
   void _updateLastMessage(String newContent) {
-    final newMessages = List<Map<String, String>>.from(state.messages);
-    if (newMessages.isNotEmpty && newMessages.last['role'] == 'assistant') {
-      newMessages.last = {'role': 'assistant', 'content': newContent};
-      state = state.copyWith(messages: newMessages);
-    }
+    final messages = state.messages;
+    if (messages.isEmpty || messages.last['role'] != 'assistant') return;
+    // Identical text would still hand the UI a brand-new list and trigger a
+    // rebuild, so drop the write entirely.
+    if (messages.last['content'] == newContent) return;
+
+    final newMessages = List<Map<String, String>>.from(messages);
+    newMessages.last = {'role': 'assistant', 'content': newContent};
+    state = state.copyWith(messages: newMessages);
   }
 
   Future<void> stopListening() async {
@@ -510,16 +744,29 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     state = state.copyWith(isListening: true, partialVoiceText: '');
 
-    await voiceService.startListening(onResult: (text, isFinal) {
-      if (isFinal && text.isNotEmpty) {
-        // Got final text — stop listening, send message, speak response, then listen again
-        state = state.copyWith(isListening: false, partialVoiceText: '');
-        _sendSpeakAndListenAgain(text);
-      } else if (text.isNotEmpty) {
-        // Partial — update live text
-        state = state.copyWith(partialVoiceText: text);
-      }
-    });
+    await voiceService.startListening(
+      onResult: (text, isFinal) {
+        if (isFinal && text.isNotEmpty) {
+          // Got final text — stop listening.
+          state = state.copyWith(isListening: false, partialVoiceText: '');
+          // When Interactive Mode is active, a spoken phrase is a command for
+          // the agent, not a chat turn. Submit it and do NOT re-enter the voice
+          // conversation loop (the agent run drives the interaction instead).
+          final interactive = _ref.read(interactiveModeControllerProvider);
+          if (interactive.active) {
+            _ref
+                .read(interactiveModeControllerProvider.notifier)
+                .submitCommand(text);
+            return;
+          }
+          // Otherwise: send message, speak response, then listen again.
+          _sendSpeakAndListenAgain(text);
+        } else if (text.isNotEmpty) {
+          // Partial — update live text
+          state = state.copyWith(partialVoiceText: text);
+        }
+      },
+    );
   }
 
   /// Voice conversation loop: Send → Get AI response → Speak it → Listen again.
@@ -530,8 +777,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _isVoiceConversationActive = true;
 
     // 1. Add User Message
-    final modelState = _ref.read(modelSelectorProvider);
-    if (modelState.activeModelId == null || state.isModelLoading) {
+    if (!_hasUsableModel() || state.isModelLoading) {
       _isVoiceConversationActive = false;
       return;
     }
@@ -550,83 +796,134 @@ class ChatNotifier extends StateNotifier<ChatState> {
     } catch (_) {}
 
     state = state.copyWith(
-      messages: [...state.messages, {'role': 'user', 'content': text}],
+      messages: [
+        ...state.messages,
+        {'role': 'user', 'content': text},
+      ],
       isThinking: true,
     );
     _saveChat();
 
     state = state.copyWith(
-      messages: [...state.messages, {'role': 'assistant', 'content': ''}],
+      messages: [
+        ...state.messages,
+        {'role': 'assistant', 'content': ''},
+      ],
     );
 
+    // Voice flows through the orchestrator like text chat. The orchestrator
+    // decides internally whether a message needs web search (only for genuine
+    // real-time info) or a direct model answer — so voice stays conversational.
     String fullResponse = '';
+    final voiceService = _ref.read(voiceServiceProvider);
+
+    // Streaming TTS: speak sentences as they arrive instead of waiting for full response
+    final chunker = SpeechChunker();
+    bool firstSentenceSpoken = false;
+
     try {
+      // Wait out any in-flight generation so the spoken turn is not rejected.
+      await _ref.read(llmRouterProvider).waitUntilIdle();
       final orchestrator = _ref.read(orchestratorServiceProvider);
       final history = state.messages
           .where((m) => m['role'] == 'user' || m['role'] == 'assistant')
-          .map((m) => "${m['role'] == 'user' ? 'User' : 'Assistant'}: ${m['content']}")
+          .map(
+            (m) =>
+                "${m['role'] == 'user' ? 'User' : 'Assistant'}: ${m['content']}",
+          )
           .toList();
-      final limitedHistory = history.length > 3 ? history.sublist(history.length - 3) : history;
+      final limitedHistory = history.length > 3
+          ? history.sublist(history.length - 3)
+          : history;
 
       final isConcise = _ref.read(conciseModeProvider);
       final stream = orchestrator.processMessage(
-        message: isConcise
-            ? '$text\n\n[System Instruction: Please keep your response extremely concise, direct, and under 2-3 sentences.]'
-            : text,
+        message: text,
         chatHistory: limitedHistory,
         hasDocuments: false,
         isVoiceQuery: true,
+        isConcise: isConcise,
+        isVoice: true,
       );
 
-      await for (final chunk in stream) {
-        fullResponse += chunk;
+      await for (final rawChunk in stream) {
+        var chunk = _consumeNavigationMarkers(rawChunk);
+        var stopAfterChunk = false;
 
         // If action completed (app opened, search done) — stop voice loop
-        if (fullResponse.contains('__DISMISS__')) {
-          fullResponse = fullResponse.replaceAll('__DISMISS__', '').trim();
-          _updateLastMessage(fullResponse);
-          _isVoiceConversationActive = false; // Stop the listen loop
-          break;
+        if (chunk.contains('__DISMISS__')) {
+          chunk = chunk.replaceAll('__DISMISS__', '');
+          _isVoiceConversationActive = false;
+          stopAfterChunk = true;
         }
 
-        // Anti-hallucination check
-        final cleaned = _truncateAtHallucination(fullResponse);
-        if (cleaned != null) {
-          fullResponse = cleaned;
-          _updateLastMessage(fullResponse);
-          break;
+        // Anti-hallucination: keep only text produced before a fake turn.
+        final candidate = fullResponse + chunk;
+        final marker = _truncateAtHallucination(candidate);
+        if (marker != null) {
+          chunk = marker.length > fullResponse.length
+              ? marker.substring(fullResponse.length)
+              : '';
+          stopAfterChunk = true;
         }
-        _updateLastMessage(fullResponse);
+
+        fullResponse += chunk;
+        _queueStreamUpdate(fullResponse);
+
+        // STREAMING TTS: speak as soon as a speakable chunk is available.
+        if (_isVoiceConversationActive) {
+          chunker.add(chunk);
+          String? toSpeak;
+          while ((toSpeak = chunker.takeChunk()) != null) {
+            if (!firstSentenceSpoken) {
+              firstSentenceSpoken = true;
+              debugPrint('VOICE: first spoken chunk ready');
+            }
+            await voiceService.speakChunk(toSpeak!);
+          }
+        }
+
+        if (stopAfterChunk) break;
       }
+      _commitStreamUpdate(fullResponse);
+
+      // Speak any remaining text that didn't end with punctuation
+      final remaining = chunker.drain();
+      if (remaining != null && _isVoiceConversationActive) {
+        await voiceService.speakChunk(remaining);
+      }
+      if (fullResponse.trim().isEmpty && _isVoiceConversationActive) {
+        fullResponse = "I didn't catch an answer for that. Please ask again.";
+        _commitStreamUpdate(fullResponse);
+        await voiceService.speakChunk(fullResponse);
+      }
+      voiceService.markSpeakingDone();
 
       _saveChat();
-      _ref.read(contextWindowProvider.notifier).updateFromMessagesFast(state.messages);
+      _ref
+          .read(contextWindowProvider.notifier)
+          .updateFromMessagesFast(state.messages);
     } catch (e) {
+      _cancelStreamUpdates();
       debugPrint('Voice sendMessage error: $e');
       if (fullResponse.isEmpty) {
         fullResponse = "Sorry, I couldn't process that. Try again.";
         _updateLastMessage(fullResponse);
+        if (_isVoiceConversationActive) {
+          await voiceService.speakChunk(fullResponse);
+          voiceService.markSpeakingDone();
+        }
       }
     } finally {
+      _cancelStreamUpdates();
+      voiceService.markSpeakingDone();
       state = state.copyWith(isThinking: false);
       _isProcessing = false;
     }
 
-    // 2. Speak the response
-    if (fullResponse.isNotEmpty && _isVoiceConversationActive) {
-      try {
-        debugPrint('VOICE: Speaking response (${fullResponse.length} chars)');
-        final voiceService = _ref.read(voiceServiceProvider);
-        await voiceService.speak(fullResponse);
-        debugPrint('VOICE: TTS done');
-      } catch (e) {
-        debugPrint('VOICE: TTS failed: $e');
-      }
-    }
-
-    // 3. Automatically start listening again for continuous conversation
+    // Automatically start listening again for continuous conversation
     if (_isVoiceConversationActive) {
-      await Future.delayed(const Duration(milliseconds: 500));
+      await Future.delayed(const Duration(milliseconds: 300));
       if (_isVoiceConversationActive) {
         startListening();
       }
@@ -658,15 +955,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final voiceService = _ref.read(voiceServiceProvider);
       voiceService.stopListening();
       voiceService.stopSpeaking();
-    } catch (_) {/* best-effort cleanup */}
+    } catch (_) {
+      /* best-effort cleanup */
+    }
     _saveDebounce?.cancel();
+    _cancelStreamUpdates();
     super.dispose();
   }
 
   void addOfflineMessage(Map<String, String> message) {
-    state = state.copyWith(
-      messages: [...state.messages, message],
-    );
+    state = state.copyWith(messages: [...state.messages, message]);
     _saveChat();
   }
 }
@@ -676,7 +974,9 @@ class ConciseModeNotifier extends StateNotifier<bool> {
   void toggle() => state = !state;
 }
 
-final conciseModeProvider = StateNotifierProvider<ConciseModeNotifier, bool>((ref) {
+final conciseModeProvider = StateNotifierProvider<ConciseModeNotifier, bool>((
+  ref,
+) {
   return ConciseModeNotifier();
 });
 

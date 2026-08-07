@@ -13,7 +13,7 @@ The two engines use different model file formats and different prompt templates
 (ChatML `<|im_start|>` for GGUF/Qwen versus Gemma `<start_of_turn>` for LiteRT). The
 newer Gemma models additionally support native function/tool calling, which is more
 accurate than the existing rule-based intent detection.
-
+wh
 The core architectural goal is a dual-engine design that introduces an engine
 abstraction layer behind the existing `LLMService` interface, so the orchestrator and
 the rest of the application are unaffected. The existing RunAnywhere/GGUF engine and the

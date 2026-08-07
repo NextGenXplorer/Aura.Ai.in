@@ -83,6 +83,10 @@ class ScreenContextAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         Log.d(TAG, "Screen Context Accessibility Service connected")
 
+        // Interactive Agent Mode (additive): register this live instance with the
+        // action surface. The surface performs nothing until a session enables it.
+        AgentActionSurface.attach(this)
+
         val info = AccessibilityServiceInfo().apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                     AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
@@ -201,6 +205,9 @@ class ScreenContextAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // Interactive Agent Mode (additive): tear down the action surface so no
+        // agent thread or node handle outlives the service.
+        AgentActionSurface.detach()
         pendingRunnable?.let { handler.removeCallbacks(it) }
         currentScreenContent = ""
         currentPackageName = ""

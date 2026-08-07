@@ -123,7 +123,12 @@ class NotificationManagerHelper(private val context: Context) {
         )
 
         val builder = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setLargeIcon(
+                android.graphics.BitmapFactory.decodeResource(
+                    context.resources, R.mipmap.ic_launcher
+                )
+            )
             .setContentTitle(displayTitle)
             .setContentText(subText)
             .setStyle(NotificationCompat.BigTextStyle().bigText("$displayTitle\n$subText"))
